@@ -241,6 +241,9 @@ class AccountPool:
     # ── 初始化与持久化 ────────────────────────
     async def load(self):
         data = await self.accounts_db.get()
+        # 防护：自动展平意外的嵌套数组 [[{...}]]
+        while isinstance(data, list) and len(data) == 1 and isinstance(data[0], list):
+            data = data[0]
         async with self._lock:
             self._accounts = []
             for item in (data or []):
