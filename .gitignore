@@ -38,6 +38,8 @@ nginx.conf
 pyproject.toml
 uv.lock
 test_upload.txt
+qwen2api总json.json
+*.json.json
 
 # Tests and scripts
 test_*.py
@@ -51,11 +53,11 @@ fix_*.py
 .env.test.local
 .env.production.local
 
-# IDE
+# IDE and local tools
 .vscode/
 .idea/
 .claude/
-.gitignore
+.kiro/
 *.suo
 *.ntvs
 *.njsproj
