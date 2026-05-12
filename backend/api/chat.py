@@ -272,9 +272,9 @@ async def chat_completions(request: Request):
         async def generate():
             current_prompt = prompt
             excluded_accounts = set()
-            # Native-first 策略：优先使用 Qwen 原生 function_calling，触发率更高
-            # 仅在被平台拦截后才 fallback 到 XML 模式
-            force_xml_mode = False
+            # 有工具时直接用 XML 模式（Qwen 平台会拦截自定义工具名的 native FC）
+            # 无工具时不需要 XML 模式
+            force_xml_mode = bool(tools)
             max_attempts = settings.TOOL_MAX_RETRIES if tools else settings.MAX_RETRIES
             for stream_attempt in range(max_attempts):
               try:
@@ -547,7 +547,7 @@ async def chat_completions(request: Request):
     else:
         current_prompt = prompt
         excluded_accounts = set()
-        force_xml_mode = False  # Native-first 策略
+        force_xml_mode = bool(tools)  # 有工具时用 XML 模式
         max_attempts = settings.TOOL_MAX_RETRIES if tools else settings.MAX_RETRIES
         acc: Optional[Account] = None
         chat_id: Optional[str] = None

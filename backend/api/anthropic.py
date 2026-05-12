@@ -133,8 +133,8 @@ async def anthropic_messages(request: Request):
 
     completion_id = f"msg_{uuid.uuid4().hex[:24]}"
     created = int(time.time())
-    # Native-first 策略：优先使用原生 function_calling，触发率更高
-    force_xml_mode = False
+    # 有工具时用 XML 模式（Qwen 平台会拦截自定义工具名的 native FC）
+    force_xml_mode = bool(tool_defs)
 
     log.info(f"[Anthropic] model={qwen_model} stream={stream} tools={[t['name'] for t in tool_defs]}")
 
