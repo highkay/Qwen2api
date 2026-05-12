@@ -1,6 +1,6 @@
 """
-httpx_engine.py — 用 curl_cffi 直连 Qwen API（Chrome TLS 指纹）
-优点：TLS 指纹与真实 Chrome 一致，无编码问题，支持流式早期中止
+httpx_engine.py -- 用 curl_cffi 直连 Qwen API（Chrome TLS 指纹）
+优点：TLS 指纹与真实 Chrome 一致，连接池复用，流式即时透传
 """
 
 import asyncio
@@ -29,12 +29,13 @@ _IMPERSONATE = "chrome124"
 
 
 class HttpxEngine:
-    """Direct curl_cffi engine — Chrome TLS fingerprint, same interface as BrowserEngine."""
+    """Direct curl_cffi engine -- Chrome TLS fingerprint, connection pool reuse."""
 
     def __init__(self, pool_size: int = 3, base_url: str = BASE_URL):
         self.base_url = base_url
         self._started = False
         self._ready = asyncio.Event()
+        self._session = None
 
     async def start(self):
         self._started = True
@@ -43,6 +44,9 @@ class HttpxEngine:
 
     async def stop(self):
         self._started = False
+        if self._session:
+            await self._session.close()
+            self._session = None
         log.info("[HttpxEngine] 已停止")
 
     def _auth_headers(self, token: str) -> dict:
@@ -62,7 +66,7 @@ class HttpxEngine:
             return {"status": 0, "body": str(e)}
 
     async def fetch_chat(self, token: str, chat_id: str, payload: dict, buffered: bool = False):
-        """Stream Qwen SSE via curl_cffi with Chrome TLS fingerprint."""
+        """Stream Qwen SSE via curl_cffi -- 使用 aiter_content 即时透传，不等完整行。"""
         from curl_cffi.requests import AsyncSession
         url = self.base_url + f"/api/v2/chat/completions?chat_id={chat_id}"
         headers = {
@@ -73,7 +77,7 @@ class HttpxEngine:
         body_bytes = json.dumps(payload, ensure_ascii=False).encode()
 
         try:
-            async with AsyncSession(impersonate=_IMPERSONATE, timeout=1800) as client:
+            async with AsyncSession(impersonate=_IMPERSONATE, timeout=120) as client:
                 async with client.stream("POST", url, headers=headers, data=body_bytes) as resp:
                     if resp.status_code != 200:
                         body_chunks = []
@@ -83,14 +87,13 @@ class HttpxEngine:
                         yield {"status": resp.status_code, "body": body_text}
                         return
 
-                    async for line in resp.aiter_lines():
-                        if not line:
+                    # 使用 aiter_content 即时获取数据块，不等完整行
+                    # 这样首字节到达后立即透传，不会被行缓冲延迟
+                    async for chunk in resp.aiter_content():
+                        if not chunk:
                             continue
-                        # aiter_lines already handles line splitting, we just yield it back to QwenClient
-                        # but QwenClient expects partial SSE segments, so we add the \n back if needed
-                        # Or better: yield as chunk with \n\n to trigger QwenClient's split
-                        decoded = line.decode("utf-8", errors="replace")
-                        yield {"status": "streamed", "chunk": decoded + "\n"}
+                        decoded = chunk.decode("utf-8", errors="replace")
+                        yield {"status": "streamed", "chunk": decoded}
 
         except Exception as e:
             log.error(f"[HttpxEngine] fetch_chat error: {e}")
