@@ -109,11 +109,137 @@ async def add_account(request: Request, _=Depends(_require_admin)):
     password = body.get("password", "")
     token = body.get("token", "")
 
-    if not token:
-        return JSONResponse({"ok": False, "error": "Token is required"})
+    if not token and not password:
+        return JSONResponse({"ok": False, "error": "Token or password is required"})
+
+    if not email:
+        email = f"manual_{int(__import__('time').time())}@qwen"
 
     acc = await pool.add_account(email, password, token)
     return {"ok": True, "email": acc.email}
+
+
+@router.post("/accounts/batch")
+async def batch_import_accounts(request: Request, _=Depends(_require_admin)):
+    """
+    批量导入账号。支持多种格式：
+
+    格式 1 - 账号对象数组：
+    {"accounts": [{"email": "...", "password": "...", "token": "..."}]}
+
+    格式 2 - 纯 token 列表（每行一个）：
+    {"tokens": "token1\\ntoken2\\ntoken3"}
+
+    格式 3 - email:password:token 格式（每行一个，冒号分隔）：
+    {"lines": "email1:pass1:token1\\nemail2:pass2:token2"}
+
+    格式 4 - JSON 数组直接传入：
+    {"accounts": [{"token": "..."}]}
+    """
+    pool = request.app.state.account_pool
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+
+    imported = 0
+    errors = []
+
+    # 格式 1 & 4: 账号对象数组
+    if "accounts" in body:
+        accounts_data = body["accounts"]
+        if isinstance(accounts_data, str):
+            try:
+                accounts_data = json.loads(accounts_data)
+            except json.JSONDecodeError:
+                return JSONResponse({"ok": False, "error": "accounts field is not valid JSON"}, status_code=400)
+
+        # 自动展平嵌套
+        while isinstance(accounts_data, list) and len(accounts_data) == 1 and isinstance(accounts_data[0], list):
+            accounts_data = accounts_data[0]
+
+        if not isinstance(accounts_data, list):
+            return JSONResponse({"ok": False, "error": "accounts must be an array"}, status_code=400)
+
+        for i, item in enumerate(accounts_data):
+            if not isinstance(item, dict):
+                errors.append(f"Item {i}: not an object")
+                continue
+            token = item.get("token", "")
+            email = item.get("email", "") or f"batch_{int(__import__('time').time())}_{i}@qwen"
+            password = item.get("password", "")
+            if not token and not password:
+                errors.append(f"Item {i} ({email}): no token or password")
+                continue
+            try:
+                await pool.add_account(email, password, token)
+                imported += 1
+            except Exception as e:
+                errors.append(f"Item {i} ({email}): {e}")
+
+    # 格式 2: 纯 token 列表
+    elif "tokens" in body:
+        tokens_raw = body["tokens"]
+        if isinstance(tokens_raw, list):
+            token_list = tokens_raw
+        else:
+            token_list = [t.strip() for t in str(tokens_raw).splitlines() if t.strip()]
+
+        for i, token in enumerate(token_list):
+            if not token or len(token) < 10:
+                errors.append(f"Line {i+1}: token too short")
+                continue
+            email = f"token_{int(__import__('time').time())}_{i}@qwen"
+            try:
+                await pool.add_account(email, "", token)
+                imported += 1
+            except Exception as e:
+                errors.append(f"Line {i+1}: {e}")
+
+    # 格式 3: email:password:token 行格式
+    elif "lines" in body:
+        lines_raw = body["lines"]
+        lines = [l.strip() for l in str(lines_raw).splitlines() if l.strip()]
+
+        for i, line in enumerate(lines):
+            parts = line.split(":", 2)  # 最多分 3 段
+            if len(parts) == 3:
+                email, password, token = parts[0].strip(), parts[1].strip(), parts[2].strip()
+            elif len(parts) == 2:
+                # 可能是 email:token 或 email:password
+                first, second = parts[0].strip(), parts[1].strip()
+                if len(second) > 50:  # 看起来像 JWT token
+                    email, password, token = first, "", second
+                else:
+                    email, password, token = first, second, ""
+            elif len(parts) == 1:
+                # 纯 token
+                token = parts[0].strip()
+                email = f"line_{int(__import__('time').time())}_{i}@qwen"
+                password = ""
+            else:
+                errors.append(f"Line {i+1}: cannot parse")
+                continue
+
+            if not token and not password:
+                errors.append(f"Line {i+1}: no token or password")
+                continue
+            if not email:
+                email = f"line_{int(__import__('time').time())}_{i}@qwen"
+            try:
+                await pool.add_account(email, password, token)
+                imported += 1
+            except Exception as e:
+                errors.append(f"Line {i+1}: {e}")
+    else:
+        return JSONResponse({"ok": False, "error": "请提供 accounts、tokens 或 lines 字段"}, status_code=400)
+
+    return {
+        "ok": imported > 0,
+        "imported": imported,
+        "errors": errors[:20],  # 最多返回 20 条错误
+        "total_in_pool": len(pool.all_accounts()),
+    }
 
 
 @router.delete("/accounts/{email}")
@@ -173,14 +299,35 @@ async def save_raw_accounts(request: Request, _=Depends(_require_admin)):
         body = await request.json()
         content = body.get("content", "")
         data = json.loads(content)
+
+        # 自动展平嵌套数组 [[{...}]]
+        while isinstance(data, list) and len(data) == 1 and isinstance(data[0], list):
+            data = data[0]
+
         if not isinstance(data, list):
             return JSONResponse({"ok": False, "detail": "Must be a JSON array"}, status_code=400)
 
+        # 验证每个元素是 dict 且有 token
+        valid_items = []
+        skipped = 0
+        for item in data:
+            if not isinstance(item, dict):
+                skipped += 1
+                continue
+            if not item.get("token") and not item.get("password"):
+                skipped += 1
+                continue
+            valid_items.append(item)
+
         pool = request.app.state.account_pool
         db = request.app.state.accounts_db
-        await db.save(data)
+        await db.save(valid_items)
         await pool.load()
-        return {"ok": True}
+
+        msg = f"已加载 {len(valid_items)} 个账号"
+        if skipped:
+            msg += f"（跳过 {skipped} 个无效条目）"
+        return {"ok": True, "message": msg, "loaded": len(valid_items), "skipped": skipped}
     except json.JSONDecodeError as e:
         return JSONResponse({"ok": False, "detail": f"Invalid JSON: {e}"}, status_code=400)
     except Exception as e:
