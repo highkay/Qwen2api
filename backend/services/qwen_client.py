@@ -210,8 +210,7 @@ class QwenClient:
     def _build_payload(self, chat_id: str, model: str, content: str,
                         has_custom_tools: bool = False,
                         enable_native_fc: Optional[bool] = None,
-                        thinking: Optional[bool] = None,
-                        files: Optional[list] = None) -> dict:
+                        thinking: Optional[bool] = None) -> dict:
         ts = int(time.time())
         # has_custom_tools=True: 关闭思考/搜索/插件（适用于任何工具调用模式）
         # enable_native_fc: 独立控制是否开启 Qwen 平台原生 function_calling
@@ -252,7 +251,7 @@ class QwenClient:
             "chat_id": chat_id, "chat_mode": "normal", "model": model, "parent_id": None,
             "messages": [{
                 "fid": str(uuid.uuid4()), "parentId": None, "childrenIds": [str(uuid.uuid4())],
-                "role": "user", "content": content, "user_action": "chat", "files": files or [],
+                "role": "user", "content": content, "user_action": "chat", "files": [],
                 "timestamp": ts, "models": [model], "chat_type": "t2t",
                 "feature_config": feature_config,
                 "extra": {"meta": {"subChatType": "t2t"}}, "sub_chat_type": "t2t", "parent_id": None,
@@ -377,9 +376,7 @@ class QwenClient:
                                               has_custom_tools: bool = False,
                                               xml_mode: bool = False,
                                               exclude_accounts: Optional[set[str]] = None,
-                                              thinking: Optional[bool] = None,
-                                              files: Optional[list] = None,
-                                              image_messages: Optional[list] = None):
+                                              thinking: Optional[bool] = None):
         """无感容灾重试逻辑：上游挂了自动换号"""
         exclude = set(exclude_accounts or set())
         # xml_mode: 有工具但不用 Qwen 原生 FC，用 XML prompt 注入
@@ -413,22 +410,11 @@ class QwenClient:
                         await asyncio.sleep(wait_s)
                 chat_id = await self.create_chat(acc.token, model)
                 self.active_chat_ids.add(chat_id)
-                # 多模态：用当前账号上传图片（文件绑定用户）
-                actual_files = files or []
-                if image_messages and not actual_files:
-                    try:
-                        from backend.services.file_upload import extract_and_upload_images
-                        actual_files = await extract_and_upload_images(image_messages, acc.token)
-                        if actual_files:
-                            log.info(f"[多模态] 已上传 {len(actual_files)} 个文件: account={acc.email}")
-                    except Exception as e:
-                        log.warning(f"[多模态] 图片上传失败: {e}")
-                payload = self._build_payload(chat_id, model, content, effective_has_tools, enable_native_fc, thinking, actual_files)
+                payload = self._build_payload(chat_id, model, content, effective_has_tools, enable_native_fc, thinking)
                 log.info(
                     f"[重试 {attempt+1}/{settings.MAX_RETRIES}] 已创建会话：account={acc.email} chat_id={chat_id} "
                     f"engine={self.engine.__class__.__name__} function_calling={payload['messages'][0]['feature_config'].get('function_calling')} "
-                    f"thinking_enabled={payload['messages'][0]['feature_config'].get('thinking_enabled')} "
-                    f"files={len(payload['messages'][0].get('files', []))} prompt_len={len(payload['messages'][0].get('content', ''))}"
+                    f"thinking_enabled={payload['messages'][0]['feature_config'].get('thinking_enabled')}"
                 )
 
                 # First yield the chat_id and account to the consumer
