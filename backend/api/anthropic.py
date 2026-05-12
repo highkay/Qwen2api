@@ -16,7 +16,7 @@ from backend.core.account_pool import Account
 from backend.services.qwen_client import QwenClient
 from backend.services.prompt_builder import messages_to_prompt
 from backend.services.tool_parser import parse_tool_calls, build_tool_blocks_from_native_chunks, inject_format_reminder, should_block_tool_call
-from backend.core.config import resolve_model, settings
+from backend.core.config import resolve_model, resolve_model_thinking, settings
 
 log = logging.getLogger("qwen2api.anthropic")
 router = APIRouter()
@@ -113,6 +113,7 @@ async def anthropic_messages(request: Request):
 
     model_name = req.get("model", "claude-3-5-sonnet-latest")
     qwen_model = resolve_model(model_name)
+    req_thinking = resolve_model_thinking(model_name)
     stream = req.get("stream", False)
     max_tokens = req.get("max_tokens", 4096)
 
@@ -158,7 +159,7 @@ async def anthropic_messages(request: Request):
                     native_tc_chunks: dict = {}
 
                     # 边读边吐：文本 delta 实时透传，工具检测并行进行
-                    async for item in _stream_items_with_keepalive(client, qwen_model, current_prompt, has_custom_tools=bool(tool_defs), xml_mode=fxm, exclude_accounts=excluded):
+                    async for item in _stream_items_with_keepalive(client, qwen_model, current_prompt, has_custom_tools=bool(tool_defs), xml_mode=fxm, exclude_accounts=excluded, thinking=req_thinking):
                         if item["type"] == "keepalive":
                             yield ": keepalive\n\n"
                             continue
@@ -262,7 +263,7 @@ async def anthropic_messages(request: Request):
                 events = []
                 chat_id = None
                 acc = None
-                async for item in client.chat_stream_events_with_retry(qwen_model, current_prompt, has_custom_tools=bool(tool_defs), xml_mode=fxm, exclude_accounts=excluded):
+                async for item in client.chat_stream_events_with_retry(qwen_model, current_prompt, has_custom_tools=bool(tool_defs), xml_mode=fxm, exclude_accounts=excluded, thinking=req_thinking):
                     if item["type"] == "meta":
                         chat_id = item["chat_id"]
                         acc = item["acc"]

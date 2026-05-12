@@ -16,7 +16,7 @@ from backend.core.account_pool import Account
 from backend.services.qwen_client import QwenClient
 from backend.services.prompt_builder import messages_to_prompt
 from backend.services.tool_parser import parse_tool_calls, build_tool_blocks_from_native_chunks, inject_format_reminder
-from backend.core.config import resolve_model, settings
+from backend.core.config import resolve_model, resolve_model_thinking, settings
 
 log = logging.getLogger("qwen2api.responses")
 router = APIRouter()
@@ -183,6 +183,7 @@ async def openai_responses(request: Request):
 
     model_name = req.get("model", "gpt-4o")
     qwen_model = resolve_model(model_name)
+    req_thinking = resolve_model_thinking(model_name)
     stream = req.get("stream", False)
 
     # Build messages
@@ -217,7 +218,7 @@ async def openai_responses(request: Request):
             chat_id = None
             acc = None
             try:
-                async for item in client.chat_stream_events_with_retry(qwen_model, current_prompt, has_custom_tools=bool(tool_defs), xml_mode=fxm, exclude_accounts=excluded):
+                async for item in client.chat_stream_events_with_retry(qwen_model, current_prompt, has_custom_tools=bool(tool_defs), xml_mode=fxm, exclude_accounts=excluded, thinking=req_thinking):
                     if item["type"] == "meta":
                         chat_id = item["chat_id"]
                         acc = item["acc"]

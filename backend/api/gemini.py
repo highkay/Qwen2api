@@ -16,7 +16,7 @@ from backend.core.account_pool import Account
 from backend.services.qwen_client import QwenClient
 from backend.services.prompt_builder import messages_to_prompt
 from backend.services.tool_parser import parse_tool_calls, build_tool_blocks_from_native_chunks, inject_format_reminder
-from backend.core.config import resolve_model, settings
+from backend.core.config import resolve_model, resolve_model_thinking, settings
 
 log = logging.getLogger("qwen2api.gemini")
 router = APIRouter()
@@ -135,6 +135,7 @@ async def gemini_generate(model: str, request: Request):
     # 模型名映射（gemini-2.5-pro → qwen3.6-plus）
     clean_model = model.split("/")[-1]
     qwen_model = resolve_model(clean_model)
+    req_thinking = resolve_model_thinking(clean_model)
 
     system_parts = req.get("systemInstruction", {}).get("parts", [])
     system_text = " ".join(p.get("text", "") for p in system_parts if "text" in p)
@@ -161,7 +162,7 @@ async def gemini_generate(model: str, request: Request):
             chat_id = None
             acc = None
             try:
-                async for item in client.chat_stream_events_with_retry(qwen_model, current_prompt, has_custom_tools=bool(tool_defs), xml_mode=fxm, exclude_accounts=excluded):
+                async for item in client.chat_stream_events_with_retry(qwen_model, current_prompt, has_custom_tools=bool(tool_defs), xml_mode=fxm, exclude_accounts=excluded, thinking=req_thinking):
                     if item["type"] == "meta":
                         chat_id = item["chat_id"]
                         acc = item["acc"]
