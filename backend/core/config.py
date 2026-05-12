@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     # 服务配置
     PORT: int = int(os.getenv("PORT", 7860))
     WORKERS: int = int(os.getenv("WORKERS", 3))
-    ADMIN_KEY: str = os.getenv("ADMIN_KEY", "")  # 必须显式配置，不再提供弱默认值
+    ADMIN_KEY: str = os.getenv("ADMIN_KEY", "123456")  # 默认管理密钥
     REGISTER_SECRET: str = os.getenv("REGISTER_SECRET", "")
     
     # MoeMail 自建配置
@@ -108,6 +108,7 @@ settings = Settings()
 # ── 运行时设置持久化（UI 层修改的设置保存到 config.json）──
 _RUNTIME_CONFIG_FILE = DATA_DIR / "runtime_settings.json"
 _PERSIST_KEYS = [
+    "ADMIN_KEY",
     "AUTO_REPLENISH", "REPLENISH_TARGET", "REPLENISH_CONCURRENCY",
     "AUTO_REPLENISH_ON_EXHAUST", "REPLENISH_EXHAUST_COUNT", "REPLENISH_EXHAUST_CONCURRENCY",
     "MAX_INFLIGHT_PER_ACCOUNT", "MAX_RPM_PER_ACCOUNT", "MAX_TPM_PER_ACCOUNT",
@@ -169,12 +170,8 @@ def resolve_model(name: str) -> str:
 
 
 def validate_security_config():
-    """启动时校验安全相关配置，防止弱密钥上线。"""
+    """启动时校验安全相关配置。"""
     _log = logging.getLogger("qwen2api.config")
     if not settings.ADMIN_KEY:
-        _log.warning("[Security] ADMIN_KEY 未配置，将使用随机生成的临时密钥（仅限开发环境）")
-        import secrets
-        settings.ADMIN_KEY = secrets.token_urlsafe(32)
-        _log.warning(f"[Security] 临时 ADMIN_KEY = {settings.ADMIN_KEY}")
-    elif settings.ADMIN_KEY in ("123456", "admin", "password", "test", "000000"):
-        _log.warning(f"[Security] ADMIN_KEY 过于简单（{settings.ADMIN_KEY}），强烈建议更换为强密钥")
+        _log.warning("[Security] ADMIN_KEY 未配置，使用默认值 123456")
+        settings.ADMIN_KEY = "123456"

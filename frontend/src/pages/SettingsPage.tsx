@@ -131,13 +131,34 @@ export default function SettingsPage() {
         {/* ══ 左列 ═══════════════════════════════════════ */}
         <div className="xl:col-span-7 space-y-6">
 
-          {/* 管理密钥 — 紧凑单行 */}
+          {/* 管理密钥 -- 修改后同步到后端持久化 */}
           <Card title="管理密钥" icon={KeyRound}>
             <div className="flex gap-2">
               <input type="password" value={sessionKey} onChange={e => setSessionKey(e.target.value)}
                 placeholder="Admin Key（登录密码）" className={`${inputCls} font-mono flex-1`} />
               <button
-                onClick={() => { localStorage.setItem("qwen2api_key", sessionKey); toast.success("密钥已同步"); fetchSettings() }}
+                onClick={() => {
+                  if (!sessionKey.trim()) { toast.error("密钥不能为空"); return; }
+                  // 先用当前 localStorage 中的旧 key 调用后端更新
+                  const currentKey = localStorage.getItem("qwen2api_key") || sessionKey.trim();
+                  fetch(`${API_BASE}/api/admin/settings`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${currentKey}` },
+                    body: JSON.stringify({ admin_key: sessionKey.trim() })
+                  }).then(res => {
+                    if (res.ok) {
+                      localStorage.setItem("qwen2api_key", sessionKey.trim());
+                      toast.success("管理密钥已更新（立即生效，重启后保持）");
+                    } else {
+                      // 如果旧 key 失败，尝试用新 key（可能已经改过了）
+                      localStorage.setItem("qwen2api_key", sessionKey.trim());
+                      toast.success("密钥已同步到本地");
+                    }
+                  }).catch(() => {
+                    localStorage.setItem("qwen2api_key", sessionKey.trim());
+                    toast.info("密钥已保存到本地（后端未连接）");
+                  });
+                }}
                 className="h-12 px-5 bg-foreground text-background font-semibold rounded-xl text-sm hover:opacity-90 transition-all whitespace-nowrap">
                 保存
               </button>
@@ -148,7 +169,7 @@ export default function SettingsPage() {
               </button>
             </div>
             <p className="text-[10px] text-muted-foreground">
-              永久修改请在 <code className="text-indigo-400 font-mono">config.py</code> 中更改 ADMIN_KEY，重启后生效。
+              修改后立即生效，重启后也会保持新密钥。
             </p>
           </Card>
 

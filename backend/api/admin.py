@@ -299,6 +299,7 @@ async def delete_key(key: str, _=Depends(_require_admin)):
 @router.get("/settings")
 async def get_settings(_=Depends(_require_admin)):
     return {
+        "admin_key": settings.ADMIN_KEY,
         "max_inflight_per_account": settings.MAX_INFLIGHT_PER_ACCOUNT,
         "engine_mode": settings.ENGINE_MODE,
         "model_aliases": MODEL_MAP,
@@ -337,6 +338,11 @@ async def update_settings(request: Request, _=Depends(_require_admin)):
         settings.MAX_INFLIGHT_PER_ACCOUNT = int(body["max_inflight_per_account"])
     if "engine_mode" in body:
         settings.ENGINE_MODE = body["engine_mode"]
+    if "admin_key" in body:
+        new_key = str(body["admin_key"]).strip()
+        if new_key:
+            settings.ADMIN_KEY = new_key
+            log.info(f"[Admin] ADMIN_KEY 已更新（热生效）")
     if "model_aliases" in body and isinstance(body["model_aliases"], dict):
         MODEL_MAP.update(body["model_aliases"])
     if "moemail_domain" in body:
