@@ -32,8 +32,8 @@ class Settings(BaseSettings):
     STREAM_KEEPALIVE_INTERVAL: int = int(os.getenv("STREAM_KEEPALIVE_INTERVAL", 5))
 
     # 容灾与限流
-    MAX_RETRIES: int = 2
-    TOOL_MAX_RETRIES: int = 3
+    MAX_RETRIES: int = 3
+    TOOL_MAX_RETRIES: int = 4
     EMPTY_RESPONSE_RETRIES: int = 1
     ACCOUNT_MIN_INTERVAL_MS: int = int(os.getenv("ACCOUNT_MIN_INTERVAL_MS", 300))
     REQUEST_JITTER_MIN_MS: int = int(os.getenv("REQUEST_JITTER_MIN_MS", 30))
