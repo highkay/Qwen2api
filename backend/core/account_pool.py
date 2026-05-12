@@ -295,22 +295,24 @@ class AccountPool:
 
     @staticmethod
     def _is_token_expired(token: str, now: float = 0) -> bool:
-        """快速检查 JWT token 是否已过期（不做签名验证，只看 exp 字段）。"""
+        """快速检查 JWT token 是否已过期或无效。"""
         if not token:
             return True
         try:
             import base64, json as _json
             parts = token.split(".")
             if len(parts) < 2:
-                return False  # 非 JWT 格式，不做判断
+                return True  # 非 JWT 格式，视为无效
             payload = parts[1]
             payload += "=" * (4 - len(payload) % 4)
             decoded = _json.loads(base64.b64decode(payload))
             exp = decoded.get("exp", 0)
-            if exp and exp < (now or __import__("time").time()):
+            if not exp:
+                return True  # 没有 exp 字段，视为无效
+            if exp < (now or __import__("time").time()):
                 return True
         except Exception:
-            pass  # 解析失败不阻止使用
+            return True  # 解析失败视为无效
         return False
 
     async def acquire(self, exclude: set[str] | None = None,
