@@ -155,18 +155,92 @@ def _load_runtime_settings():
     except Exception as e:
         logging.getLogger("qwen2api").warning(f"加载运行时设置失败: {e}")
 
-# 全局映射（默认为空——用户在管理后台自行配置，保存后写入 runtime_settings.json）
-# 修复：不再硬编码默认值，避免用户清空后每次重启自动恢复
+# ── Qwen 官网内置可用模型 ──────────────────────────────────────────────────────
+BUILTIN_MODELS = [
+    "qwen3.6-plus",
+    "qwen3.6-max-preview",
+    "qwen3.6-27b",
+]
+
+# 默认模型（未知模型名的 fallback）
+DEFAULT_MODEL = "qwen3.6-plus"
+
+# ── 默认别名映射（常见 OpenAI/Claude/Gemini 模型名 -> Qwen 模型）──────────────
+DEFAULT_MODEL_ALIASES: dict[str, str] = {
+    # OpenAI 系列
+    "gpt-4o": "qwen3.6-plus",
+    "gpt-4o-mini": "qwen3.6-27b",
+    "gpt-4-turbo": "qwen3.6-plus",
+    "gpt-4": "qwen3.6-plus",
+    "gpt-4.1": "qwen3.6-plus",
+    "gpt-4.1-mini": "qwen3.6-27b",
+    "gpt-4.1-nano": "qwen3.6-27b",
+    "gpt-3.5-turbo": "qwen3.6-27b",
+    "gpt-3.5": "qwen3.6-27b",
+    "o1": "qwen3.6-max-preview",
+    "o1-mini": "qwen3.6-plus",
+    "o1-preview": "qwen3.6-max-preview",
+    "o3": "qwen3.6-max-preview",
+    "o3-mini": "qwen3.6-plus",
+    "o4-mini": "qwen3.6-plus",
+    # Claude 系列
+    "claude-3-5-sonnet-latest": "qwen3.6-max-preview",
+    "claude-3-5-sonnet-20241022": "qwen3.6-max-preview",
+    "claude-3-5-haiku-latest": "qwen3.6-plus",
+    "claude-3-opus-latest": "qwen3.6-max-preview",
+    "claude-3-sonnet-20240229": "qwen3.6-plus",
+    "claude-3-haiku-20240307": "qwen3.6-27b",
+    "claude-sonnet-4-20250514": "qwen3.6-max-preview",
+    "claude-haiku-4-20250514": "qwen3.6-plus",
+    # Gemini 系列
+    "gemini-2.5-pro": "qwen3.6-max-preview",
+    "gemini-2.5-flash": "qwen3.6-plus",
+    "gemini-2.0-flash": "qwen3.6-plus",
+    "gemini-1.5-pro": "qwen3.6-plus",
+    "gemini-1.5-flash": "qwen3.6-27b",
+    "gemini-pro": "qwen3.6-plus",
+    # DeepSeek 系列
+    "deepseek-chat": "qwen3.6-plus",
+    "deepseek-reasoner": "qwen3.6-max-preview",
+    "deepseek-coder": "qwen3.6-plus",
+    # Qwen 旧名/别名
+    "qwen-plus": "qwen3.6-plus",
+    "qwen-max": "qwen3.6-max-preview",
+    "qwen-turbo": "qwen3.6-27b",
+    "qwen-long": "qwen3.6-plus",
+    "qwen-coder-plus": "qwen3.6-plus",
+    "qwq-plus": "qwen3.6-max-preview",
+    "qwq-max": "qwen3.6-max-preview",
+}
+
+# 用户自定义映射（管理后台配置，优先级最高）
 MODEL_MAP: dict = {}
 
 # 启动时从持久化文件恢复（包括 MODEL_MAP）
 _load_runtime_settings()
 
-# 图片生成沿用网页当前真实可用的基础模型，不再写死 wanx 模型名
+# 图片生成沿用网页当前真实可用的基础模型
 IMAGE_MODEL_DEFAULT = "qwen3.6-plus"
 
+
 def resolve_model(name: str) -> str:
-    return MODEL_MAP.get(name, name)
+    """解析模型名。优先级：用户自定义 > 默认别名 > 内置模型 > 默认模型。"""
+    if name in MODEL_MAP:
+        return MODEL_MAP[name]
+    if name in DEFAULT_MODEL_ALIASES:
+        return DEFAULT_MODEL_ALIASES[name]
+    if name in BUILTIN_MODELS:
+        return name
+    return DEFAULT_MODEL
+
+
+def get_all_available_models() -> list[str]:
+    """获取所有可用模型名（内置 + 默认别名 + 用户自定义）。"""
+    all_names = set(BUILTIN_MODELS)
+    all_names.update(DEFAULT_MODEL_ALIASES.keys())
+    all_names.update(MODEL_MAP.keys())
+    all_names.update(MODEL_MAP.values())
+    return sorted(all_names)
 
 
 def validate_security_config():
