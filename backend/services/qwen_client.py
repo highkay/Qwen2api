@@ -378,7 +378,8 @@ class QwenClient:
                                               xml_mode: bool = False,
                                               exclude_accounts: Optional[set[str]] = None,
                                               thinking: Optional[bool] = None,
-                                              files: Optional[list] = None):
+                                              files: Optional[list] = None,
+                                              image_messages: Optional[list] = None):
         """无感容灾重试逻辑：上游挂了自动换号"""
         exclude = set(exclude_accounts or set())
         # xml_mode: 有工具但不用 Qwen 原生 FC，用 XML prompt 注入
@@ -412,11 +413,22 @@ class QwenClient:
                         await asyncio.sleep(wait_s)
                 chat_id = await self.create_chat(acc.token, model)
                 self.active_chat_ids.add(chat_id)
-                payload = self._build_payload(chat_id, model, content, effective_has_tools, enable_native_fc, thinking, files)
+                # 多模态：用当前账号上传图片（文件绑定用户）
+                actual_files = files or []
+                if image_messages and not actual_files:
+                    try:
+                        from backend.services.file_upload import extract_and_upload_images
+                        actual_files = await extract_and_upload_images(image_messages, acc.token)
+                        if actual_files:
+                            log.info(f"[多模态] 已上传 {len(actual_files)} 个文件: account={acc.email}")
+                    except Exception as e:
+                        log.warning(f"[多模态] 图片上传失败: {e}")
+                payload = self._build_payload(chat_id, model, content, effective_has_tools, enable_native_fc, thinking, actual_files)
                 log.info(
                     f"[重试 {attempt+1}/{settings.MAX_RETRIES}] 已创建会话：account={acc.email} chat_id={chat_id} "
                     f"engine={self.engine.__class__.__name__} function_calling={payload['messages'][0]['feature_config'].get('function_calling')} "
-                    f"thinking_enabled={payload['messages'][0]['feature_config'].get('thinking_enabled')}"
+                    f"thinking_enabled={payload['messages'][0]['feature_config'].get('thinking_enabled')} "
+                    f"files={len(payload['messages'][0].get('files', []))} prompt_len={len(payload['messages'][0].get('content', ''))}"
                 )
 
                 # First yield the chat_id and account to the consumer
