@@ -217,17 +217,29 @@ class QwenClient:
         # thinking: 显式控制思考模式（None=自动，True=强制开，False=强制关）
         if enable_native_fc is None:
             enable_native_fc = bool(has_custom_tools and settings.NATIVE_TOOL_PASSTHROUGH)
-        # 思考模式决策：有工具时关闭，否则看 thinking 参数
-        if thinking is None:
-            think_on = not has_custom_tools
+        # 思考模式决策：
+        # thinking=True → 强制开启思考
+        # thinking=False → 强制关闭思考（快速模式）
+        # thinking=None → 自动模式（有工具时关闭，无工具时让 Qwen 自动决定）
+        if has_custom_tools:
+            think_on = False
+            think_mode = "off"
+        elif thinking is True:
+            think_on = True
+            think_mode = "on"
+        elif thinking is False:
+            think_on = False
+            think_mode = "off"
         else:
-            think_on = thinking and not has_custom_tools
+            # None = 自动模式
+            think_on = True
+            think_mode = "Auto"
         feature_config = {
             "thinking_enabled": think_on,
             "output_schema": "phase",
             "research_mode": "normal",
-            "auto_thinking": think_on,
-            "thinking_mode": "off" if not think_on else "Auto",
+            "auto_thinking": think_on and think_mode == "Auto",
+            "thinking_mode": think_mode,
             "thinking_format": "summary",
             "auto_search": not has_custom_tools,
             "code_interpreter": not has_custom_tools,
