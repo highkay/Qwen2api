@@ -90,6 +90,11 @@ class Settings(BaseSettings):
     WEBUI_ENABLED: bool = os.getenv("WEBUI_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     WEBUI_KEY: str = os.getenv("WEBUI_KEY", "")
 
+    # 图片返回格式：qwen_url / local_url / qwen_md / local_md / base64
+    IMAGE_FORMAT: str = os.getenv("IMAGE_FORMAT", "local_md")
+    # 图片缓存上限（MB），0=不限制
+    IMAGE_CACHE_MAX_MB: int = int(os.getenv("IMAGE_CACHE_MAX_MB", 100))
+
 
     # 数据文件路径
     ACCOUNTS_FILE: str = os.getenv("ACCOUNTS_FILE", str(DATA_DIR / "accounts.json"))
@@ -137,6 +142,7 @@ _PERSIST_KEYS = [
     "LOG_LEVEL", "LOG_MAX_DAYS",
     "TIMEOUT_CHAT", "TIMEOUT_IMAGE", "TIMEOUT_STREAM_IDLE", "TIMEOUT_REGISTER",
     "WEBUI_ENABLED", "WEBUI_KEY",
+    "IMAGE_FORMAT", "IMAGE_CACHE_MAX_MB",
 ]
 
 def save_runtime_settings():

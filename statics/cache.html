@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Qwen2api - 缓存管理</title>
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
+  <link href="/statics/css/app.css" rel="stylesheet">
+</head>
+<body>
+  <header class="admin-header" id="admin-header"></header>
+  <main class="admin-main">
+    <div class="page-hd">
+      <div>
+        <div class="page-title">缓存管理</div>
+        <div class="page-sub">查看并管理本地缓存文件与容量上限</div>
+      </div>
+    </div>
+
+    <div class="section-title">缓存概览</div>
+    <div class="stat-grid" style="grid-template-columns:repeat(3,1fr)" id="cache-stats"></div>
+
+    <div style="display:flex;align-items:baseline;justify-content:space-between;margin:28px 0 14px">
+      <div class="section-title" style="margin:0">本地图片</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-danger" onclick="clearCache()">清空全部</button>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <button class="pagi-btn" onclick="prevPage()"><svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg></button>
+        <span id="pagi-info" style="padding:0 6px">第 1 / 1 页</span>
+        <button class="pagi-btn" onclick="nextPage()"><svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg></button>
+      </div>
+      <div class="toolbar-right">
+        <select onchange="changePageSize(this.value)" style="height:28px;padding:0 8px;border-radius:999px;font-size:11px;background:#fafafa;border:0;color:#8f8f8f">
+          <option value="50">50 / 页</option>
+          <option value="100" selected>100 / 页</option>
+          <option value="200">200 / 页</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="table-card">
+      <table>
+        <thead><tr>
+          <th>文件名</th>
+          <th style="width:100px">大小</th>
+          <th style="width:160px">修改时间</th>
+          <th style="width:80px;text-align:right">操作</th>
+        </tr></thead>
+        <tbody id="cache-tbody"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script src="/statics/js/common.js"></script>
+  <script>
+    let page = 1, pageSize = 100;
+
+    async function init() {
+      if (!await checkAuth()) return;
+      renderHeader('cache');
+      await loadStats();
+      await loadList();
+    }
+
+    async function loadStats() {
+      const r = await fetch('/api/admin/cache', { headers: authHeaders() });
+      const d = await r.json();
+      const img = d.local_image || {};
+      document.getElementById('cache-stats').innerHTML = `
+        <div class="stat-cell"><div class="stat-top"><span class="stat-label">图片数量</span></div><div class="stat-num" style="color:var(--info)">${img.count || 0}</div></div>
+        <div class="stat-cell"><div class="stat-top"><span class="stat-label">缓存大小</span></div><div class="stat-num">${img.size_mb || 0} MB</div><div style="font-size:11px;color:#999;margin-top:4px">上限 ${img.limit_mb || 0} MB (${img.usage_percent || 0}%)</div></div>
+        <div class="stat-cell"><div class="stat-top"><span class="stat-label">使用率</span></div><div style="margin-top:auto"><div style="height:6px;border-radius:999px;background:#f0f0f0;overflow:hidden"><div style="height:100%;width:${Math.min(img.usage_percent||0,100)}%;border-radius:999px;background:${(img.usage_percent||0)>90?'var(--error)':'var(--info)'}"></div></div></div></div>
+      `;
+    }
+
+    async function loadList() {
+      const r = await fetch(`/api/admin/cache/list?page=${page}&page_size=${pageSize}`, { headers: authHeaders() });
+      const d = await r.json();
+      const total = d.total || 0;
+      const pages = Math.max(1, Math.ceil(total / pageSize));
+      document.getElementById('pagi-info').textContent = `第 ${page} / ${pages} 页`;
+      const items = d.items || [];
+      if (items.length === 0) {
+        document.getElementById('cache-tbody').innerHTML = '<tr><td colspan="4" style="text-align:center;padding:40px;color:var(--fg-muted)">暂无缓存文件</td></tr>';
+        return;
+      }
+      document.getElementById('cache-tbody').innerHTML = items.map(f => `<tr>
+        <td style="font-family:var(--font-mono);font-size:12px">${f.name}</td>
+        <td style="font-size:12px;color:#666">${(f.size_bytes/1024).toFixed(1)} KB</td>
+        <td style="font-size:11px;color:#999">${new Date(f.modified_at*1000).toLocaleString('zh-CN')}</td>
+        <td style="text-align:right"><button class="row-btn" onclick="viewFile('${f.name}')" title="查看"><svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="3"/></svg></button> <button class="row-btn row-btn-danger" onclick="deleteFile('${f.name}')" title="删除"><svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></td>
+      </tr>`).join('');
+    }
+
+    function viewFile(name) {
+      window.open('/v1/files/image?id=' + name.replace(/\.[^.]+$/, ''), '_blank');
+    }
+
+    async function deleteFile(name) {
+      if (!confirm('确认删除?')) return;
+      await fetch('/api/admin/cache/delete?name=' + encodeURIComponent(name), { method: 'POST', headers: authHeaders() });
+      showToast('已删除');
+      loadStats(); loadList();
+    }
+
+    async function clearCache() {
+      if (!confirm('确认清空所有图片缓存?')) return;
+      await fetch('/api/admin/cache/clear', { method: 'POST', headers: authHeaders() });
+      showToast('已清空');
+      loadStats(); loadList();
+    }
+
+    function prevPage() { if (page > 1) { page--; loadList(); } }
+    function nextPage() { page++; loadList(); }
+    function changePageSize(v) { pageSize = +v; page = 1; loadList(); }
+
+    init();
+  </script>
+</body>
+</html>

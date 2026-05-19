@@ -1,36 +1,151 @@
 """
-image_proxy.py -- 图片代理服务
-下载上游图片到内存缓存，通过本地 URL 分发，避免暴露上游 CDN 地址。
+image_proxy.py -- 图片代理服务（磁盘持久化版）
+仿 grok2api 的 media_cache 机制：图片存到 data/files/images/，支持容量管理。
 """
 
 import hashlib
-import time
 import logging
+import os
+import re
+import time
+import uuid
+from pathlib import Path
 from typing import Optional
+
+from backend.core.config import settings, DATA_DIR
 
 log = logging.getLogger("qwen2api.image_proxy")
 
-# 内存缓存：{image_id: {"data": bytes, "content_type": str, "created": float}}
-_cache: dict[str, dict] = {}
-_MAX_CACHE_SIZE = 200  # 最多缓存 200 张图片
-_CACHE_TTL = 3600  # 1 小时过期
+# 图片存储目录
+IMAGES_DIR = DATA_DIR / "files" / "images"
+IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+_IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"})
 
 
-def generate_image_id(url: str) -> str:
-    """根据 URL 生成唯一 ID"""
-    return hashlib.md5(url.encode()).hexdigest()[:16]
+def generate_image_id() -> str:
+    """生成唯一图片 ID"""
+    return uuid.uuid4().hex[:24]
 
 
-async def download_and_cache(url: str) -> Optional[str]:
-    """下载图片并缓存，返回 image_id。失败返回 None。"""
+def save_image(data: bytes, content_type: str) -> str:
+    """保存图片到磁盘，返回 file_id"""
+    file_id = generate_image_id()
+    ext = ".png" if "png" in content_type.lower() else ".jpg"
+    path = IMAGES_DIR / f"{file_id}{ext}"
+    path.write_bytes(data)
+    log.info(f"[ImageProxy] 已保存: {file_id}{ext} ({len(data)} bytes)")
+    # 容量管理
+    _enforce_limit()
+    return file_id
+
+
+def get_image_path(file_id: str) -> Optional[Path]:
+    """根据 file_id 查找图片文件路径"""
+    if not re.fullmatch(r"[0-9a-f]{16,36}", file_id):
+        return None
+    for ext in (".jpg", ".png", ".jpeg", ".gif", ".webp"):
+        path = IMAGES_DIR / f"{file_id}{ext}"
+        if path.exists():
+            return path
+    return None
+
+
+def get_image_mime(path: Path) -> str:
+    """根据扩展名返回 MIME 类型"""
+    ext = path.suffix.lower()
+    mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp"}
+    return mime_map.get(ext, "image/jpeg")
+
+
+def list_images(page: int = 1, page_size: int = 100) -> dict:
+    """列出缓存的图片文件"""
+    files = sorted(
+        (f for f in IMAGES_DIR.glob("*") if f.is_file() and f.suffix.lower() in _IMAGE_EXTS),
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+    total = len(files)
+    start = (page - 1) * page_size
+    chunk = files[start:start + page_size]
+    items = []
+    for f in chunk:
+        st = f.stat()
+        items.append({
+            "name": f.name,
+            "size_bytes": st.st_size,
+            "modified_at": st.st_mtime,
+        })
+    return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+
+def get_cache_stats() -> dict:
+    """获取图片缓存统计"""
+    files = [f for f in IMAGES_DIR.glob("*") if f.is_file() and f.suffix.lower() in _IMAGE_EXTS]
+    total_size = sum(f.stat().st_size for f in files)
+    limit_mb = getattr(settings, "IMAGE_CACHE_MAX_MB", 100)
+    limit_bytes = limit_mb * 1024 * 1024
+    usage_ratio = (total_size / limit_bytes) if limit_bytes > 0 else 0
+    return {
+        "count": len(files),
+        "size_mb": round(total_size / 1024 / 1024, 2),
+        "size_bytes": total_size,
+        "limit_mb": limit_mb,
+        "limit_bytes": limit_bytes,
+        "usage_ratio": round(usage_ratio, 4),
+        "usage_percent": round(usage_ratio * 100, 1),
+    }
+
+
+def delete_image(name: str) -> bool:
+    """删除单个图片"""
+    path = IMAGES_DIR / name
+    if path.exists() and path.is_file():
+        path.unlink()
+        return True
+    return False
+
+
+def clear_all_images() -> int:
+    """清空所有图片缓存"""
+    removed = 0
+    for f in IMAGES_DIR.glob("*"):
+        if f.is_file() and f.suffix.lower() in _IMAGE_EXTS:
+            f.unlink()
+            removed += 1
+    return removed
+
+
+def _enforce_limit():
+    """容量管理：超限后按最旧文件优先清理到 60%"""
+    limit_mb = getattr(settings, "IMAGE_CACHE_MAX_MB", 100)
+    if limit_mb <= 0:
+        return
+    limit_bytes = limit_mb * 1024 * 1024
+    files = sorted(
+        (f for f in IMAGES_DIR.glob("*") if f.is_file() and f.suffix.lower() in _IMAGE_EXTS),
+        key=lambda f: f.stat().st_mtime,
+    )
+    total_size = sum(f.stat().st_size for f in files)
+    if total_size <= limit_bytes:
+        return
+    target = int(limit_bytes * 0.6)
+    removed = 0
+    for f in files:
+        if total_size <= target:
+            break
+        size = f.stat().st_size
+        f.unlink()
+        total_size -= size
+        removed += 1
+    if removed:
+        log.info(f"[ImageProxy] 容量清理: 删除 {removed} 个文件，当前 {total_size // 1024 // 1024}MB")
+
+
+async def download_and_save(url: str) -> Optional[str]:
+    """下载图片并保存到磁盘，返回 file_id"""
     import httpx
-
-    image_id = generate_image_id(url)
-
-    # 已缓存则直接返回
-    if image_id in _cache:
-        return image_id
-
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             resp = await client.get(url)
@@ -38,82 +153,36 @@ async def download_and_cache(url: str) -> Optional[str]:
                 log.warning(f"[ImageProxy] 下载失败: {url} -> {resp.status_code}")
                 return None
             content_type = resp.headers.get("content-type", "image/png")
-            data = resp.content
-
-        # 清理过期缓存
-        _cleanup()
-
-        _cache[image_id] = {
-            "data": data,
-            "content_type": content_type,
-            "created": time.time(),
-        }
-        log.info(f"[ImageProxy] 已缓存: {image_id} ({len(data)} bytes)")
-        return image_id
+            return save_image(resp.content, content_type)
     except Exception as e:
         log.warning(f"[ImageProxy] 下载异常: {url} -> {e}")
         return None
 
 
-def get_cached_image(image_id: str) -> Optional[dict]:
-    """获取缓存的图片数据。返回 {"data": bytes, "content_type": str} 或 None。"""
-    entry = _cache.get(image_id)
-    if not entry:
-        return None
-    # 检查过期
-    if time.time() - entry["created"] > _CACHE_TTL:
-        del _cache[image_id]
-        return None
-    return entry
-
-
-def _cleanup():
-    """清理过期和超量缓存"""
-    now = time.time()
-    expired = [k for k, v in _cache.items() if now - v["created"] > _CACHE_TTL]
-    for k in expired:
-        del _cache[k]
-    # 超量时删除最旧的
-    while len(_cache) >= _MAX_CACHE_SIZE:
-        oldest = min(_cache, key=lambda k: _cache[k]["created"])
-        del _cache[oldest]
-
-
 async def proxy_image_urls(text: str, app_url: str) -> str:
-    """将文本中的上游图片 URL 替换为本地代理 URL。
-    
-    只处理 markdown 图片格式: ![alt](url)
-    """
-    import re
-
+    """将文本中的上游图片 URL 替换为本地代理 URL"""
     if not app_url:
-        return text  # 未配置 app_url，不做代理
-
+        return text
     app_url = app_url.rstrip("/")
-
-    async def replace_url(match):
-        alt = match.group(1)
-        url = match.group(2)
-        image_id = await download_and_cache(url)
-        if image_id:
-            return f"![{alt}]({app_url}/proxy/image/{image_id})"
-        return match.group(0)  # 下载失败，保留原 URL
-
-    # 找到所有 markdown 图片
     pattern = re.compile(r'!\[([^\]]*)\]\((https?://[^\s\)]+)\)')
     matches = list(pattern.finditer(text))
-
     if not matches:
         return text
-
-    # 逐个替换（需要 await）
     result = text
-    for m in reversed(matches):  # 从后往前替换避免偏移
+    for m in reversed(matches):
         alt = m.group(1)
         url = m.group(2)
-        image_id = await download_and_cache(url)
-        if image_id:
-            new_str = f"![{alt}]({app_url}/proxy/image/{image_id})"
+        file_id = await download_and_save(url)
+        if file_id:
+            new_str = f"![{alt}]({app_url}/v1/files/image?id={file_id})"
             result = result[:m.start()] + new_str + result[m.end():]
-
     return result
+
+
+# 兼容旧接口
+def get_cached_image(image_id: str) -> Optional[dict]:
+    """兼容旧的内存缓存接口"""
+    path = get_image_path(image_id)
+    if not path:
+        return None
+    return {"data": path.read_bytes(), "content_type": get_image_mime(path)}

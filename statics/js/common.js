@@ -26,6 +26,7 @@ function renderHeader(active) {
       <nav class="admin-nav">
         <a href="/admin/accounts" class="${active === 'accounts' ? 'active' : ''}">账户管理</a>
         <a href="/admin/config" class="${active === 'config' ? 'active' : ''}">配置管理</a>
+        <a href="/admin/cache" class="${active === 'cache' ? 'active' : ''}">缓存管理</a>
         <a href="/admin/register" class="${active === 'register' ? 'active' : ''}">扩容中心</a>
       </nav>
       <div class="admin-header-right">

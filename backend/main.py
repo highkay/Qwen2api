@@ -168,6 +168,10 @@ async def admin_config_page():
 async def admin_register_page():
     return FileResponse(STATICS_DIR / "register.html")
 
+@app.get("/admin/cache", include_in_schema=False)
+async def admin_cache_page():
+    return FileResponse(STATICS_DIR / "cache.html")
+
 @app.get("/admin", include_in_schema=False)
 async def admin_root():
     from fastapi.responses import RedirectResponse
@@ -208,16 +212,28 @@ async def root():
 
 # ── 图片代理路由 ──────────────────────────────────────────────────────────────
 from fastapi.responses import Response
-from backend.services.image_proxy import get_cached_image
+from backend.services.image_proxy import get_image_path, get_image_mime
+
+@app.get("/v1/files/image", include_in_schema=False)
+async def serve_image(id: str = ""):
+    """返回本地缓存的图片"""
+    import re
+    if not id or not re.fullmatch(r"[0-9a-f]{16,36}", id):
+        raise HTTPException(status_code=400, detail="Invalid file ID")
+    path = get_image_path(id)
+    if not path:
+        raise HTTPException(status_code=404, detail="Image not found")
+    return FileResponse(path, media_type=get_image_mime(path),
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 @app.get("/proxy/image/{image_id}", include_in_schema=False)
-async def proxy_image(image_id: str):
-    """返回缓存的代理图片"""
-    entry = get_cached_image(image_id)
-    if not entry:
+async def proxy_image_legacy(image_id: str):
+    """兼容旧的代理 URL 格式"""
+    path = get_image_path(image_id)
+    if not path:
         raise HTTPException(status_code=404, detail="Image not found or expired")
-    return Response(content=entry["data"], media_type=entry["content_type"],
-                    headers={"Cache-Control": "public, max-age=3600"})
+    return FileResponse(path, media_type=get_image_mime(path),
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 # 托管前端构建产物（仅当 dist 存在时，即生产打包模式）
 FRONTEND_DIST = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")

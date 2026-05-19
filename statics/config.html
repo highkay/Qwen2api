@@ -173,6 +173,13 @@
               { key: 'timeout_register', label: '注册请求超时（秒）', type: 'number', desc: '账号注册流程的统一超时时间。' },
             ]
           },
+          {
+            title: '媒体返回格式', section: 'media',
+            fields: [
+              { key: 'image_format', label: '图片返回格式', type: 'select', options: [{value:'qwen_url',label:'URL（Qwen 原生）'},{value:'local_url',label:'URL（本地代理）'},{value:'qwen_md',label:'Markdown（Qwen 原生）'},{value:'local_md',label:'Markdown（本地代理）'},{value:'base64',label:'Base64（内嵌）'}], desc: 'qwen_url/qwen_md 直接返回 Qwen CDN 地址；local_* 模式会先下载到服务端再通过本地 URL 代理分发；base64 以内嵌 Data URI 返回。' },
+              { key: 'image_cache_max_mb', label: '图片缓存上限（MB）', type: 'number', desc: '0 表示不限制。仅对本地代理落盘生效；超限后按最旧文件优先清理，并一次性回落到上限的 60%。' },
+            ]
+          },
         ]
       },
       {

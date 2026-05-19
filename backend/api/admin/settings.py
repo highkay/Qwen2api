@@ -48,6 +48,8 @@ async def get_settings(_=Depends(_require_admin)):
         "timeout_register": getattr(settings, "TIMEOUT_REGISTER", 60),
         "webui_enabled": getattr(settings, "WEBUI_ENABLED", True),
         "webui_key": getattr(settings, "WEBUI_KEY", ""),
+        "image_format": getattr(settings, "IMAGE_FORMAT", "local_md"),
+        "image_cache_max_mb": getattr(settings, "IMAGE_CACHE_MAX_MB", 100),
     }
 
 
@@ -87,6 +89,8 @@ async def get_default_settings(_=Depends(_require_admin)):
         "timeout_register": 60,
         "webui_enabled": True,
         "webui_key": "",
+        "image_format": "local_md",
+        "image_cache_max_mb": 100,
     }
 
 
@@ -164,6 +168,10 @@ async def update_settings(request: Request, _=Depends(_require_admin)):
         settings.WEBUI_ENABLED = bool(body["webui_enabled"])
     if "webui_key" in body:
         settings.WEBUI_KEY = str(body["webui_key"]).strip()
+    if "image_format" in body:
+        settings.IMAGE_FORMAT = str(body["image_format"]).strip()
+    if "image_cache_max_mb" in body:
+        settings.IMAGE_CACHE_MAX_MB = max(0, int(body["image_cache_max_mb"]))
 
     save_runtime_settings()
     return {"ok": True}

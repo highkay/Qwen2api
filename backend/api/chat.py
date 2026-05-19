@@ -87,6 +87,63 @@ def _extract_last_user_text(messages: list) -> str:
     return ""
 
 
+async def _format_image_output(image_urls: list[str], image_format: str, app_url: str) -> str:
+    """根据配置格式化图片输出。
+    
+    格式：
+    - qwen_url: 直接返回原始 URL
+    - local_url: 下载到本地，返回本地代理 URL
+    - qwen_md: Markdown 格式，使用原始 URL
+    - local_md: Markdown 格式，使用本地代理 URL
+    - base64: Base64 Data URI 内嵌
+    """
+    from backend.services.image_proxy import download_and_save
+    import httpx, base64
+
+    if image_format == "qwen_url":
+        return "\n".join(image_urls)
+    elif image_format == "qwen_md":
+        return "\n".join(f"![generated]({u})" for u in image_urls)
+    elif image_format == "local_url":
+        results = []
+        base = (app_url or "").rstrip("/")
+        for url in image_urls:
+            file_id = await download_and_save(url)
+            if file_id and base:
+                results.append(f"{base}/v1/files/image?id={file_id}")
+            else:
+                results.append(url)
+        return "\n".join(results)
+    elif image_format == "local_md":
+        results = []
+        base = (app_url or "").rstrip("/")
+        for url in image_urls:
+            file_id = await download_and_save(url)
+            if file_id and base:
+                results.append(f"![generated]({base}/v1/files/image?id={file_id})")
+            else:
+                results.append(f"![generated]({url})")
+        return "\n".join(results)
+    elif image_format == "base64":
+        results = []
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                for url in image_urls:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        mime = resp.headers.get("content-type", "image/png")
+                        b64 = base64.b64encode(resp.content).decode()
+                        results.append(f"![generated](data:{mime};base64,{b64})")
+                    else:
+                        results.append(f"![generated]({url})")
+        except Exception:
+            results = [f"![generated]({u})" for u in image_urls]
+        return "\n".join(results)
+    else:
+        # 默认 local_md
+        return "\n".join(f"![generated]({u})" for u in image_urls)
+
+
 def _extract_image_urls(text: str) -> list[str]:
     urls: list[str] = []
     for u in re.findall(r'!\[.*?\]\((https?://[^\s\)]+)\)', text):
@@ -254,10 +311,9 @@ async def _handle_t2i(request: Request, client: QwenClient, history_messages: li
                 aio.create_task(client.delete_chat(acc.token, chat_id))
                 image_urls = _extract_image_urls(answer_text)
                 content = "\n".join(f"![generated]({u})" for u in image_urls) if image_urls else answer_text
-                # 图片代理：如果配置了 app_url，替换为本地代理 URL
-                if content and settings.APP_URL:
-                    from backend.services.image_proxy import proxy_image_urls
-                    content = await proxy_image_urls(content, settings.APP_URL)
+                # 根据 image_format 配置处理图片返回格式
+                if image_urls:
+                    content = await _format_image_output(image_urls, settings.IMAGE_FORMAT, settings.APP_URL)
                 yield f"data: {mk({'role': 'assistant'})}\n\n"
                 yield f"data: {mk({'content': content})}\n\n"
                 yield f"data: {mk({}, 'stop')}\n\n"
@@ -276,10 +332,9 @@ async def _handle_t2i(request: Request, client: QwenClient, history_messages: li
             aio.create_task(client.delete_chat(acc.token, chat_id))
             image_urls = _extract_image_urls(answer_text)
             content = "\n".join(f"![generated]({u})" for u in image_urls) if image_urls else answer_text
-            # 图片代理：如果配置了 app_url，替换为本地代理 URL
-            if content and settings.APP_URL:
-                from backend.services.image_proxy import proxy_image_urls
-                content = await proxy_image_urls(content, settings.APP_URL)
+            # 根据 image_format 配置处理图片返回格式
+            if image_urls:
+                content = await _format_image_output(image_urls, settings.IMAGE_FORMAT, settings.APP_URL)
             # 记录使用统计
             try:
                 um = request.app.state.usage_manager

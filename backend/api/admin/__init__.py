@@ -28,8 +28,10 @@ from .accounts import router as accounts_router
 from .keys import router as keys_router
 from .settings import router as settings_router
 from .stats import router as stats_router
+from .cache import router as cache_router
 
 router.include_router(accounts_router)
 router.include_router(keys_router)
 router.include_router(settings_router)
 router.include_router(stats_router)
+router.include_router(cache_router)
