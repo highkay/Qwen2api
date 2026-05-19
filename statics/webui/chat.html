@@ -75,6 +75,12 @@
     .webui-footer{text-align:center;padding:4px 0 10px;font-size:10px;color:#c5c2bc}
 
     .typing-dots span{display:inline-block;width:5px;height:5px;border-radius:50%;background:#bbb;margin:0 2px;animation:tdot 1.4s infinite}
+
+    /* Thinking/reasoning block */
+    .webui-thinking{margin-bottom:10px;border:1px solid #ece9e1;border-radius:8px;overflow:hidden}
+    .webui-thinking summary{padding:8px 12px;font-size:11px;font-weight:600;color:#75716b;cursor:pointer;background:#faf8f5;user-select:none}
+    .webui-thinking summary:hover{background:#f5f3ef}
+    .webui-thinking-body{padding:10px 12px;font-size:12px;line-height:1.6;color:#666;white-space:pre-wrap;max-height:300px;overflow-y:auto;background:#fdfcfa}
     .typing-dots span:nth-child(2){animation-delay:.2s}
     .typing-dots span:nth-child(3){animation-delay:.4s}
     @keyframes tdot{0%,80%,100%{opacity:.3}40%{opacity:1}}
@@ -231,9 +237,22 @@
       }
       inner.innerHTML = messages.map(m => {
         if (m.role === 'user') return `<div class="webui-msg webui-msg-user"><div class="webui-bubble">${esc(m.content)}</div></div>`;
-        return `<div class="webui-msg webui-msg-assistant"><div class="webui-bubble">${renderMd(m.content)}</div></div>`;
+        return `<div class="webui-msg webui-msg-assistant"><div class="webui-bubble">${formatAssistantMsg(m.reasoning, m.content)}</div></div>`;
       }).join('');
       document.getElementById('thread').scrollTop = document.getElementById('thread').scrollHeight;
+    }
+
+    function formatAssistantMsg(reasoning, content) {
+      let html = '';
+      if (reasoning) {
+        html += `<details class="webui-thinking" open><summary>思考过程</summary><div class="webui-thinking-body">${esc(reasoning)}</div></details>`;
+      }
+      if (content) {
+        html += renderMd(content);
+      } else if (!reasoning) {
+        html += '<span class="typing-dots"><span></span><span></span><span></span></span>';
+      }
+      return html;
     }
 
     function renderMd(text) {
@@ -278,17 +297,15 @@
         return;
       }
 
-      messages.push({ role: 'assistant', content: '' });
+      messages.push({ role: 'assistant', content: '', reasoning: '' });
       renderThread();
 
       try {
-        console.log('[WebChat] Sending to /v1/chat/completions, model:', model, 'messages:', messages.slice(0, -1).length);
         const resp = await fetch('/v1/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
           body: JSON.stringify({ model, messages: messages.slice(0, -1), stream: true })
         });
-        console.log('[WebChat] Response status:', resp.status);
         if (!resp.ok) {
           const errText = await resp.text();
           messages[messages.length - 1].content = '错误 (' + resp.status + '): ' + errText.slice(0, 200);
@@ -298,7 +315,10 @@
         }
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
-        let buf = '', content = '';
+        let buf = '', content = '', reasoning = '';
+        // 获取 assistant bubble 的 DOM 引用用于增量更新
+        const bubbleEl = document.getElementById('thread-inner').lastElementChild?.querySelector('.webui-bubble');
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -310,13 +330,23 @@
             if (d === '[DONE]') continue;
             try {
               const j = JSON.parse(d);
-              const delta = j.choices?.[0]?.delta?.content || '';
-              if (delta) { content += delta; messages[messages.length - 1].content = content; renderThread(); }
+              const delta = j.choices?.[0]?.delta || {};
+              let changed = false;
+              if (delta.reasoning_content) { reasoning += delta.reasoning_content; changed = true; }
+              if (delta.content) { content += delta.content; changed = true; }
+              if (changed) {
+                messages[messages.length - 1].reasoning = reasoning;
+                messages[messages.length - 1].content = content;
+                // 增量更新 DOM 而非全量重建
+                if (bubbleEl) {
+                  bubbleEl.innerHTML = formatAssistantMsg(reasoning, content);
+                  document.getElementById('thread').scrollTop = document.getElementById('thread').scrollHeight;
+                }
+              }
             } catch {}
           }
         }
       } catch (e) {
-        console.error('[WebChat] Fetch error:', e);
         messages[messages.length - 1].content = '网络错误: ' + e.message;
         renderThread();
       }
