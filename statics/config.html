@@ -176,17 +176,6 @@
         ]
       },
       {
-        id: 'model', label: '模型映射',
-        groups: [
-          {
-            title: '模型别名', section: 'model',
-            fields: [
-              { key: 'model_aliases', label: '映射表', type: 'json', desc: 'JSON 格式，key 为请求中的模型名，value 为 Qwen 真实模型名。' },
-            ]
-          },
-        ]
-      },
-      {
         id: 'keys', label: 'API 密钥',
         groups: []
       },
@@ -345,13 +334,8 @@
     // 保存
     async function doSave() {
       const payload = { ...settings };
-      // 解析 model_aliases JSON
-      const ta = document.querySelector('[data-key="model_aliases"]');
-      if (ta) {
-        try { payload.model_aliases = JSON.parse(ta.value); }
-        catch { showToast('模型映射 JSON 格式错误'); return; }
-      }
-      delete payload.app_url; // app_url 暂不持久化（后端未支持）
+      delete payload.app_url;
+      delete payload.model_aliases;
       await fetch('/api/admin/settings', { method: 'PUT', headers: jsonHeaders(), body: JSON.stringify(payload) });
       configSnapshot = JSON.parse(JSON.stringify(settings));
       dirty = false;
