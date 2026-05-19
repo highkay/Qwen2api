@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>qwen2api - 配置管理</title>
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
+  <link href="/statics/css/app.css" rel="stylesheet">
+</head>
+<body>
+  <header class="admin-header" id="admin-header"></header>
+  <main class="admin-main">
+    <div class="page-hd">
+      <div>
+        <div class="page-title">配置管理</div>
+        <div class="page-sub">管理系统运行时参数与服务默认行为</div>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-primary" onclick="saveAll()">保存</button>
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tab-bar" id="tabs"></div>
+
+    <!-- Content -->
+    <div class="config-card" id="config-content"></div>
+  </main>
+
+  <script src="/statics/js/common.js"></script>
+  <script>
+    let settings = {}, keys = [], currentTab = 'engine';
+
+    const tabs = [
+      { key:'engine', label:'引擎配置' },
+      { key:'model', label:'模型映射' },
+      { key:'mail', label:'邮箱渠道' },
+      { key:'proxy', label:'网络代理' },
+      { key:'keys', label:'API 密钥' },
+    ];
+
+    async function init() {
+      if (!await checkAuth()) return;
+      renderHeader('config');
+      await fetchSettings();
+      await fetchKeys();
+      renderTabs();
+      renderContent();
+    }
+
+    async function fetchSettings() {
+      const r = await fetch('/api/admin/settings', { headers: authHeaders() });
+      settings = await r.json();
+    }
+
+    async function fetchKeys() {
+      const r = await fetch('/api/admin/keys', { headers: authHeaders() });
+      const d = await r.json();
+      keys = d.keys || [];
+    }
+
+    function renderTabs() {
+      document.getElementById('tabs').innerHTML = tabs.map(t =>
+        `<button class="tab ${currentTab===t.key?'active':''}" onclick="switchTab('${t.key}')">${t.label}</button>`
+      ).join('');
+    }
+
+    function switchTab(t) { currentTab = t; renderTabs(); renderContent() }
+
+    function renderContent() {
+      const el = document.getElementById('config-content');
+      if (currentTab === 'engine') el.innerHTML = renderEngine();
+      else if (currentTab === 'model') el.innerHTML = renderModel();
+      else if (currentTab === 'mail') el.innerHTML = renderMail();
+      else if (currentTab === 'proxy') el.innerHTML = renderProxy();
+      else if (currentTab === 'keys') el.innerHTML = renderKeys();
+    }
+
+    function renderEngine() {
+      return `
+        <div style="font-size:12px;color:var(--fg-muted);padding-bottom:8px;border-bottom:1px solid #f5f5f5;margin-bottom:16px">引擎与并发</div>
+        <div class="config-row">
+          <div><div class="config-label">驱动引擎</div><div class="config-desc">httpx 快速直连 / browser 浏览器指纹 / hybrid 混合</div></div>
+          <select class="config-select" id="cfg-engine" onchange="settings.engine_mode=this.value">
+            <option value="httpx" ${settings.engine_mode==='httpx'?'selected':''}>httpx</option>
+            <option value="browser" ${settings.engine_mode==='browser'?'selected':''}>browser</option>
+            <option value="hybrid" ${settings.engine_mode==='hybrid'?'selected':''}>hybrid</option>
+          </select>
+        </div>
+        <div class="config-row">
+          <div><div class="config-label">单账号并发</div><div class="config-desc">每个账号同时处理的最大请求数，1=最安全</div></div>
+          <input type="number" class="config-input" value="${settings.max_inflight_per_account||1}" min="1" max="10" onchange="settings.max_inflight_per_account=+this.value">
+        </div>
+        <div class="config-row">
+          <div><div class="config-label">默认流式回复</div><div class="config-desc">客户端未传 stream 字段时的默认行为</div></div>
+          <div class="toggle ${settings.default_stream!==false?'on':''}" onclick="toggleStream(this)"></div>
+        </div>
+        <div style="font-size:12px;color:var(--fg-muted);padding-bottom:8px;border-bottom:1px solid #f5f5f5;margin:24px 0 16px">自动补号</div>
+        <div class="config-row">
+          <div><div class="config-label">启用自动补号</div><div class="config-desc">账号耗尽时自动触发注册补充</div></div>
+          <div class="toggle ${settings.auto_replenish?'on':''}" onclick="toggleReplenish(this)"></div>
+        </div>
+        <div class="config-row" id="replenish-target" style="${settings.auto_replenish?'':'display:none'}">
+          <div><div class="config-label">目标账号数</div><div class="config-desc">池中账号低于此数时触发补号</div></div>
+          <input type="number" class="config-input" value="${settings.replenish_target||30}" onchange="settings.replenish_target=+this.value">
+        </div>
+      `;
+    }
+
+    function renderModel() {
+      const json = JSON.stringify(settings.model_aliases || {}, null, 2);
+      return `
+        <div style="font-size:12px;color:var(--fg-muted);margin-bottom:12px">JSON 格式，key 为请求中的模型名，value 为 Qwen 真实模型名</div>
+        <textarea id="model-json" style="width:100%;height:400px;padding:16px;font-size:12px;font-family:var(--font-mono);border-radius:12px;border:1px solid var(--border);background:#fafafa;resize:vertical;line-height:1.6">${json}</textarea>
+      `;
+    }
+
+    function renderMail() {
+      return `
+        <div style="font-size:12px;color:var(--fg-muted);padding-bottom:8px;border-bottom:1px solid #f5f5f5;margin-bottom:16px">MoeMail</div>
+        <div class="config-row">
+          <div><div class="config-label">域名</div><div class="config-desc">MoeMail 自建邮箱的域名</div></div>
+          <input class="config-input" style="width:280px" value="${settings.moemail_domain||''}" placeholder="example.com" onchange="settings.moemail_domain=this.value">
+        </div>
+        <div class="config-row">
+          <div><div class="config-label">API Key</div><div class="config-desc">MoeMail 的 API 密钥</div></div>
+          <input class="config-input" style="width:280px" value="${settings.moemail_key||''}" placeholder="密钥" onchange="settings.moemail_key=this.value">
+        </div>
+        <div style="font-size:12px;color:var(--fg-muted);padding-bottom:8px;border-bottom:1px solid #f5f5f5;margin:24px 0 16px">TempMail</div>
+        <div class="config-row">
+          <div><div class="config-label">域名</div><div class="config-desc">TempMail 自建邮箱的域名</div></div>
+          <input class="config-input" style="width:280px" value="${settings.tempmail_domain||''}" placeholder="example.com" onchange="settings.tempmail_domain=this.value">
+        </div>
+        <div class="config-row">
+          <div><div class="config-label">API Key</div><div class="config-desc">TempMail 的 API 密钥</div></div>
+          <input class="config-input" style="width:280px" value="${settings.tempmail_key||''}" placeholder="密钥" onchange="settings.tempmail_key=this.value">
+        </div>
+      `;
+    }
+
+    function renderProxy() {
+      return `
+        <div style="font-size:12px;color:var(--fg-muted);padding-bottom:8px;border-bottom:1px solid #f5f5f5;margin-bottom:16px">代理设置</div>
+        <div class="config-row">
+          <div><div class="config-label">启用代理</div><div class="config-desc">注册时使用代理绕过 WAF 限制</div></div>
+          <div class="toggle ${settings.proxy_enabled?'on':''}" onclick="toggleProxy(this)"></div>
+        </div>
+        <div id="proxy-fields" style="${settings.proxy_enabled?'':'display:none'}">
+          <div class="config-row">
+            <div><div class="config-label">代理地址</div><div class="config-desc">格式: http://host:port 或 socks5://host:port</div></div>
+            <input class="config-input" style="width:280px;font-family:var(--font-mono)" value="${settings.proxy_url||''}" placeholder="http://host:port" onchange="settings.proxy_url=this.value">
+          </div>
+          <div class="config-row">
+            <div><div class="config-label">用户名</div><div class="config-desc">代理认证用户名（可选）</div></div>
+            <input class="config-input" value="${settings.proxy_username||''}" onchange="settings.proxy_username=this.value">
+          </div>
+          <div class="config-row">
+            <div><div class="config-label">密码</div><div class="config-desc">代理认证密码（可选）</div></div>
+            <input type="password" class="config-input" value="${settings.proxy_password||''}" onchange="settings.proxy_password=this.value">
+          </div>
+        </div>
+      `;
+    }
+
+    function renderKeys() {
+      return `
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <span style="font-size:12px;color:var(--fg-muted)">${keys.length} 个密钥</span>
+          <button class="btn btn-primary" onclick="genKey()">生成新密钥</button>
+        </div>
+        ${keys.length === 0 ? '<div style="text-align:center;padding:32px;color:var(--fg-muted);font-size:12px">暂无密钥</div>' :
+          keys.map(k => `<div class="key-item"><code>${k}</code><button class="key-delete" onclick="delKey('${k}')">删除</button></div>`).join('')}
+      `;
+    }
+
+    // Toggle handlers
+    function toggleStream(el) {
+      const on = !el.classList.contains('on');
+      el.classList.toggle('on');
+      settings.default_stream = on;
+    }
+    function toggleReplenish(el) {
+      const on = !el.classList.contains('on');
+      el.classList.toggle('on');
+      settings.auto_replenish = on;
+      document.getElementById('replenish-target').style.display = on ? '' : 'none';
+    }
+    function toggleProxy(el) {
+      const on = !el.classList.contains('on');
+      el.classList.toggle('on');
+      settings.proxy_enabled = on;
+      document.getElementById('proxy-fields').style.display = on ? '' : 'none';
+    }
+
+    // Save all
+    async function saveAll() {
+      const payload = {
+        engine_mode: settings.engine_mode,
+        max_inflight_per_account: settings.max_inflight_per_account,
+        default_stream: settings.default_stream,
+        auto_replenish: settings.auto_replenish,
+        replenish_target: settings.replenish_target,
+        moemail_domain: settings.moemail_domain,
+        moemail_key: settings.moemail_key,
+        tempmail_domain: settings.tempmail_domain,
+        tempmail_key: settings.tempmail_key,
+        proxy_enabled: settings.proxy_enabled,
+        proxy_url: settings.proxy_url,
+        proxy_username: settings.proxy_username,
+        proxy_password: settings.proxy_password,
+      };
+      // Model aliases (if on model tab)
+      const ta = document.getElementById('model-json');
+      if (ta) {
+        try { payload.model_aliases = JSON.parse(ta.value) }
+        catch { showToast('模型映射 JSON 格式错误'); return }
+      }
+      await fetch('/api/admin/settings', { method:'PUT', headers:jsonHeaders(), body:JSON.stringify(payload) });
+      showToast('已保存');
+    }
+
+    // Key management
+    async function genKey() {
+      await fetch('/api/admin/keys', { method:'POST', headers:authHeaders() });
+      await fetchKeys();
+      renderContent();
+      showToast('已生成');
+    }
+    async function delKey(k) {
+      await fetch('/api/admin/keys/'+encodeURIComponent(k), { method:'DELETE', headers:authHeaders() });
+      await fetchKeys();
+      renderContent();
+      showToast('已删除');
+    }
+
+    init();
+  </script>
+</body>
+</html>
