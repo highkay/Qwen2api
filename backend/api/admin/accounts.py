@@ -367,7 +367,7 @@ async def disable_memory_all(request: Request, _=Depends(_require_admin)):
                 await _disable_one(acc)
 
         # 分批执行并报告进度
-        batch_size = 20
+        batch_size = 5
         for i in range(0, total, batch_size):
             batch = accounts_list[i:i+batch_size]
             tasks = [_with_sem(acc) for acc in batch]

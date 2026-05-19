@@ -375,9 +375,13 @@
             if (!line.startsWith('data: ')) continue;
             try {
               const d = JSON.parse(line.slice(6));
-              showToast(`进度: ${d.done}/${d.total} (成功${d.success} 失败${d.failed})`);
+              // 清除旧 toast 只保留最新
+              const wrap = document.querySelector('.toast-wrap');
+              if (wrap) wrap.innerHTML = '';
               if (d.complete) {
                 showToast(`完成: 成功 ${d.success} / 失败 ${d.failed} / 总计 ${d.total}`);
+              } else {
+                showToast(`进度: ${d.done}/${d.total} (成功${d.success} 失败${d.failed})`);
               }
             } catch {}
           }
