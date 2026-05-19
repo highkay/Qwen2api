@@ -245,6 +245,7 @@ class QwenClient:
             "code_interpreter": not has_custom_tools,
             "function_calling": enable_native_fc,
             "plugins_enabled": False if has_custom_tools else True,
+            "memory": False,
         }
         return {
             "stream": True, "version": "2.1", "incremental_output": True,
