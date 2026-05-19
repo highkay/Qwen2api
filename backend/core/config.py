@@ -168,6 +168,9 @@ BUILTIN_MODELS = [
     "qwen3.6-27b",
     "qwen3.6-27b-thinking",
     "qwen3.6-27b-nothinking",
+    # Qwen 3.7 系列（仅支持思考模式，真实 ID 是 invite-beta 格式）
+    "qwen3.7-max-preview",
+    "qwen3.7-plus-preview",
 ]
 
 # 默认模型（未知模型名的 fallback）
@@ -259,9 +262,14 @@ def resolve_model(name: str) -> str:
     if base_name in DEFAULT_MODEL_ALIASES:
         return DEFAULT_MODEL_ALIASES[base_name]
     # 4. 如果本身就是内置真实模型名
-    real_models = {"qwen3.6-plus", "qwen3.6-max-preview", "qwen3.6-27b"}
+    real_models = {"qwen3.6-plus", "qwen3.6-max-preview", "qwen3.6-27b", "qwen3.7-max-preview", "qwen3.7-plus-preview"}
     if base_name in real_models:
-        return base_name
+        # Qwen 3.7 系列的真实 ID 是 invite-beta 格式
+        qwen37_map = {
+            "qwen3.7-max-preview": "qwen-latest-series-invite-beta-v24",
+            "qwen3.7-plus-preview": "qwen-latest-series-invite-beta-v16",
+        }
+        return qwen37_map.get(base_name, base_name)
     # 5. 都不认识，用默认模型
     return DEFAULT_MODEL
 
@@ -272,6 +280,7 @@ def resolve_model_thinking(name: str) -> bool | None:
     -nothinking 后缀 = False（快速模式，关闭思考）
     -thinking 后缀 = True（强制思考模式）
     无后缀 = None（自动模式，由 Qwen 决定）
+    Qwen 3.7 系列 = 始终 True（仅支持思考模式）
     """
     if name in MODEL_MAP:
         resolved = MODEL_MAP[name]
@@ -282,6 +291,9 @@ def resolve_model_thinking(name: str) -> bool | None:
     if name.endswith(NOTHINKING_SUFFIX):
         return False
     if name.endswith(THINKING_SUFFIX):
+        return True
+    # Qwen 3.7 系列仅支持思考模式
+    if "qwen3.7" in name:
         return True
     return None  # 自动模式
 
