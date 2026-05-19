@@ -25,6 +25,8 @@ async def get_settings(_=Depends(_require_admin)):
         "moemail_key": settings.MOEMAIL_KEY,
         "tempmail_domain": settings.TEMPMAIL_DOMAIN,
         "tempmail_key": settings.TEMPMAIL_KEY,
+        "smartmail_key": getattr(settings, "SMARTMAIL_KEY", ""),
+        "vipmail_key": getattr(settings, "VIPMAIL_KEY", ""),
         "auto_replenish": settings.AUTO_REPLENISH,
         "replenish_target": settings.REPLENISH_TARGET,
         "replenish_concurrency": settings.REPLENISH_CONCURRENCY,
@@ -66,6 +68,8 @@ async def get_default_settings(_=Depends(_require_admin)):
         "moemail_key": "",
         "tempmail_domain": "",
         "tempmail_key": "",
+        "smartmail_key": "",
+        "vipmail_key": "",
         "auto_replenish": False,
         "replenish_target": 30,
         "replenish_concurrency": 3,
@@ -122,6 +126,10 @@ async def update_settings(request: Request, _=Depends(_require_admin)):
         settings.TEMPMAIL_DOMAIN = body["tempmail_domain"]
     if "tempmail_key" in body:
         settings.TEMPMAIL_KEY = body["tempmail_key"]
+    if "smartmail_key" in body:
+        settings.SMARTMAIL_KEY = str(body["smartmail_key"]).strip()
+    if "vipmail_key" in body:
+        settings.VIPMAIL_KEY = str(body["vipmail_key"]).strip()
     if "auto_replenish" in body:
         settings.AUTO_REPLENISH = bool(body["auto_replenish"])
     if "replenish_target" in body:

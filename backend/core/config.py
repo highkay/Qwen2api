@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     TEMPMAIL_DOMAIN: str = os.getenv("TEMPMAIL_DOMAIN", "")
     TEMPMAIL_KEY: str = os.getenv("TEMPMAIL_KEY", "")
 
+    # SmartMail (mail.chatgpt.org.uk) 配置
+    SMARTMAIL_KEY: str = os.getenv("SMARTMAIL_KEY", "")
+
+    # VipMail (vip.215.im) 配置
+    VIPMAIL_KEY: str = os.getenv("VIPMAIL_KEY", "")
+
     # 引擎模式：httpx（快速直连）、browser（浏览器指纹，防封）或 hybrid（混合）
     ENGINE_MODE: str = os.getenv("ENGINE_MODE", "hybrid")
     NATIVE_TOOL_PASSTHROUGH: bool = os.getenv("NATIVE_TOOL_PASSTHROUGH", "true").lower() in ("1", "true", "yes", "on")
@@ -138,6 +144,7 @@ _PERSIST_KEYS = [
     "MAX_INFLIGHT_PER_ACCOUNT", "MAX_RPM_PER_ACCOUNT", "MAX_TPM_PER_ACCOUNT",
     "CACHE_TTL_SECONDS", "RACING_ENABLED", "ENGINE_MODE", "DEFAULT_STREAM",
     "MOEMAIL_DOMAIN", "MOEMAIL_KEY", "TEMPMAIL_DOMAIN", "TEMPMAIL_KEY",
+    "SMARTMAIL_KEY", "VIPMAIL_KEY",
     "PROXY_ENABLED", "PROXY_URL", "PROXY_USERNAME", "PROXY_PASSWORD",
     "LOG_LEVEL", "LOG_MAX_DAYS",
     "TIMEOUT_CHAT", "TIMEOUT_IMAGE", "TIMEOUT_STREAM_IDLE", "TIMEOUT_REGISTER",
