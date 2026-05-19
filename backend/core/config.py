@@ -238,14 +238,20 @@ def resolve_model(name: str) -> str:
     elif name.endswith(THINKING_SUFFIX):
         base_name = name[:-len(THINKING_SUFFIX)]
     # 3. 如果本身就是内置真实模型名
-    real_models = {"qwen3.6-plus", "qwen3.6-max-preview", "qwen3.6-27b", "qwen3.7-max-preview-thinking", "qwen3.7-plus-preview-thinking"}
+    real_models = {"qwen3.6-plus", "qwen3.6-max-preview", "qwen3.6-27b"}
     if base_name in real_models:
-        # Qwen 3.7 系列的真实 ID 是 invite-beta 格式
-        qwen37_map = {
-            "qwen3.7-max-preview-thinking": "qwen-latest-series-invite-beta-v24",
-            "qwen3.7-plus-preview-thinking": "qwen-latest-series-invite-beta-v16",
-        }
-        return qwen37_map.get(base_name, base_name)
+        return base_name
+    # Qwen 3.7 系列：无论传入带不带 -thinking 后缀，都映射到 invite-beta ID
+    qwen37_map = {
+        "qwen3.7-max-preview-thinking": "qwen-latest-series-invite-beta-v24",
+        "qwen3.7-max-preview": "qwen-latest-series-invite-beta-v24",
+        "qwen3.7-plus-preview-thinking": "qwen-latest-series-invite-beta-v16",
+        "qwen3.7-plus-preview": "qwen-latest-series-invite-beta-v16",
+    }
+    if base_name in qwen37_map:
+        return qwen37_map[base_name]
+    if name in qwen37_map:
+        return qwen37_map[name]
     # 4. 不认识的模型名直接透传（不做映射）
     return base_name
 
