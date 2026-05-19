@@ -68,7 +68,13 @@ class HttpxEngine:
             return {"status": 0, "body": str(e)}
 
     async def fetch_chat(self, token: str, chat_id: str, payload: dict, buffered: bool = False):
-        """Stream Qwen SSE via curl_cffi -- 使用 stream=True + aiter_lines。"""
+        """Stream Qwen SSE via curl_cffi -- 使用 aiter_content 逐块读取实现真流式。
+
+        核心改进：用 aiter_content() 替代 aiter_lines()。
+        aiter_lines() 内部会缓冲直到遇到完整行，在某些情况下会导致大量数据一次性释放。
+        aiter_content() 在每个 TCP 数据包到达时立即 yield 原始字节，手动按换行分割，
+        确保 SSE 事件在上游发出后立即透传给下游客户端。
+        """
         from curl_cffi.requests import AsyncSession
         url = self.base_url + f"/api/v2/chat/completions?chat_id={chat_id}"
         headers = {
@@ -97,11 +103,26 @@ class HttpxEngine:
                     await session.close()
                     return
 
-                async for line in response.aiter_lines():
-                    if not line:
+                # 使用 aiter_content 逐块读取，手动按换行分割
+                # 这样每个 TCP 数据包到达时立即处理，不会被 aiter_lines 的内部缓冲阻塞
+                line_buffer = ""
+                async for chunk in response.aiter_content():
+                    if not chunk:
                         continue
-                    decoded = line.decode("utf-8", errors="replace") if isinstance(line, bytes) else line
-                    yield {"status": "streamed", "chunk": decoded + "\n"}
+                    text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
+                    line_buffer += text
+                    # 按换行符分割，逐行 yield
+                    while "\n" in line_buffer:
+                        line, line_buffer = line_buffer.split("\n", 1)
+                        line = line.strip()
+                        if not line:
+                            continue
+                        yield {"status": "streamed", "chunk": line + "\n"}
+
+                # 处理残余缓冲区
+                if line_buffer.strip():
+                    yield {"status": "streamed", "chunk": line_buffer.strip() + "\n"}
+
             finally:
                 try:
                     await session.close()
