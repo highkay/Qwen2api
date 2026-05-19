@@ -253,10 +253,11 @@
     function updateBatchBar() {
       selectedEmails.clear();
       document.querySelectorAll('.row-check:checked').forEach(cb => selectedEmails.add(cb.dataset.email));
-      const show = selectedEmails.size > 0;
-      ['tb-verify','tb-disable','tb-restore','tb-delete'].forEach(id => {
-        document.getElementById(id).style.display = show ? '' : 'none';
-      });
+      const show = selectedEmails.size > 0 ? '' : 'none';
+      document.getElementById('tb-verify').style.display = show;
+      document.getElementById('tb-disable').style.display = show;
+      document.getElementById('tb-restore').style.display = show;
+      document.getElementById('tb-delete').style.display = show;
     }
 
     function getSelectedEmails() {
