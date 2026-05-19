@@ -68,44 +68,29 @@ class HttpxEngine:
             return {"status": 0, "body": str(e)}
 
     async def fetch_chat(self, token: str, chat_id: str, payload: dict, buffered: bool = False):
-        """Stream Qwen SSE via curl_cffi -- 逐 chunk 读取，手动按行分割。"""
-        from curl_cffi.requests import AsyncSession
+        """Stream Qwen SSE -- 使用标准 httpx 实现真正的流式读取。"""
+        import httpx as _httpx
         url = self.base_url + f"/api/v2/chat/completions?chat_id={chat_id}"
         headers = {
             **self._auth_headers(token),
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
         }
-        body_bytes = json.dumps(payload, ensure_ascii=False).encode()
+        body_str = json.dumps(payload, ensure_ascii=False)
 
         try:
-            async with AsyncSession(impersonate=_IMPERSONATE, timeout=120) as client:
-                async with client.stream("POST", url, headers=headers, data=body_bytes) as resp:
+            async with _httpx.AsyncClient(timeout=_httpx.Timeout(120, connect=15)) as client:
+                async with client.stream("POST", url, headers=headers, content=body_str.encode()) as resp:
                     if resp.status_code != 200:
-                        body_chunks = []
-                        async for chunk in resp.aiter_content():
-                            body_chunks.append(chunk)
-                        body_text = b"".join(body_chunks).decode(errors="replace")[:2000]
+                        body_text = (await resp.aread()).decode(errors="replace")[:2000]
                         yield {"status": resp.status_code, "body": body_text}
                         return
 
-                    # 使用 aiter_content 逐 chunk 读取（真正的流式，不缓冲）
-                    buffer = ""
-                    async for raw_chunk in resp.aiter_content():
-                        if not raw_chunk:
+                    # httpx 的 aiter_lines 是真正的流式（逐行，不缓冲）
+                    async for line in resp.aiter_lines():
+                        if not line:
                             continue
-                        text = raw_chunk.decode("utf-8", errors="replace") if isinstance(raw_chunk, bytes) else raw_chunk
-                        buffer += text
-                        # 按行分割并逐行 yield
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
-                            line = line.strip()
-                            if not line:
-                                continue
-                            yield {"status": "streamed", "chunk": line + "\n"}
-                    # 处理剩余 buffer
-                    if buffer.strip():
-                        yield {"status": "streamed", "chunk": buffer.strip() + "\n"}
+                        yield {"status": "streamed", "chunk": line + "\n"}
 
         except Exception as e:
             log.error(f"[HttpxEngine] fetch_chat error: {e}")
