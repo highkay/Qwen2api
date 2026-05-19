@@ -185,6 +185,9 @@
       currentSessionId = id;
       const s = sessions.find(x => x.id === id);
       messages = s ? [...s.messages] : [];
+      // 切换会话时重置流式状态
+      isStreaming = false;
+      document.getElementById('send-btn').disabled = false;
       renderSessions();
       renderThread();
     }
@@ -306,31 +309,25 @@
       const model = document.getElementById('model-select').value;
       const key = getKey();
       if (!key) {
-        messages[messages.length - 1] = { role: 'assistant', content: '错误: 未登录，请刷新页面重新登录' };
-        messages.pop(); // 移除多余的
-        renderThread();
-        isStreaming = false;
-        document.getElementById('send-btn').disabled = false;
         location.href = '/webui/login';
         return;
       }
 
       messages.push({ role: 'assistant', content: '', reasoning: '' });
-      // 创建流式 DOM 结构（不用 renderThread 避免全量重建）
+      // 创建流式 DOM 结构
       const inner = document.getElementById('thread-inner');
       const msgDiv = document.createElement('div');
       msgDiv.className = 'webui-msg webui-msg-assistant';
       const bubble = document.createElement('div');
       bubble.className = 'webui-bubble';
-      // 思考区域（初始隐藏）
       const thinkWrap = document.createElement('div');
       thinkWrap.className = 'webui-thinking';
       thinkWrap.style.display = 'none';
       thinkWrap.innerHTML = `<div class="webui-thinking-toggle" onclick="this.classList.toggle('collapsed');this.nextElementSibling.classList.toggle('hidden')">思考过程 <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></div><div class="webui-thinking-body"></div>`;
       const thinkBody = thinkWrap.querySelector('.webui-thinking-body');
-      // 内容区域
       const contentEl = document.createElement('div');
       contentEl.className = 'webui-content-stream';
+      contentEl.innerHTML = '<span class="typing-dots"><span></span><span></span><span></span></span>';
       bubble.appendChild(thinkWrap);
       bubble.appendChild(contentEl);
       msgDiv.appendChild(bubble);
@@ -351,6 +348,8 @@
           isStreaming = false; document.getElementById('send-btn').disabled = false;
           return;
         }
+
+        // 第一步：收集全部 SSE 内容
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buf = '', content = '', reasoning = '';
@@ -367,28 +366,29 @@
             try {
               const j = JSON.parse(d);
               const delta = j.choices?.[0]?.delta || {};
-              if (delta.reasoning_content) {
-                reasoning += delta.reasoning_content;
-                thinkWrap.style.display = '';
-                thinkBody.textContent = reasoning;
-                thread.scrollTop = thread.scrollHeight;
-              }
-              if (delta.content) {
-                content += delta.content;
-                contentEl.textContent = content;
-                thread.scrollTop = thread.scrollHeight;
-              }
+              if (delta.reasoning_content) reasoning += delta.reasoning_content;
+              if (delta.content) content += delta.content;
             } catch {}
           }
         }
-        // 流结束后，用 markdown 渲染最终内容
+
+        // 第二步：打字机输出思考过程
+        if (reasoning) {
+          thinkWrap.style.display = '';
+          contentEl.innerHTML = '';
+          await typewrite(thinkBody, reasoning, 12);
+        }
+
+        // 第三步：打字机输出回复内容
+        contentEl.innerHTML = '';
+        if (content) {
+          await typewrite(contentEl, content, 15);
+          // 打字完成后 markdown 渲染
+          contentEl.innerHTML = renderMd(content);
+        }
+
         messages[messages.length - 1].reasoning = reasoning;
         messages[messages.length - 1].content = content;
-        if (content) {
-          contentEl.innerHTML = renderMd(content);
-        } else {
-          contentEl.innerHTML = '';
-        }
       } catch (e) {
         messages[messages.length - 1].content = '网络错误: ' + e.message;
         contentEl.textContent = '网络错误: ' + e.message;
@@ -396,6 +396,23 @@
       saveCurrentSession();
       isStreaming = false;
       document.getElementById('send-btn').disabled = false;
+    }
+
+    // 打字机函数：每帧输出 charsPerFrame 个字符，流畅无卡顿
+    function typewrite(el, text, charsPerFrame) {
+      return new Promise(resolve => {
+        let i = 0;
+        const thread = document.getElementById('thread');
+        function tick() {
+          if (i >= text.length) { resolve(); return; }
+          const end = Math.min(i + charsPerFrame, text.length);
+          el.textContent = text.slice(0, end);
+          i = end;
+          thread.scrollTop = thread.scrollHeight;
+          requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+      });
     }
 
     // 重新回答：删除该 assistant 消息，重新发送
