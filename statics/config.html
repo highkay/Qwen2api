@@ -29,10 +29,10 @@
 
   <script src="/statics/js/common.js"></script>
   <script>
-    let settings = {}, keys = [], currentTab = 'engine';
+    let settings = {}, keys = [], currentTab = 'system';
 
     const tabs = [
-      { key:'engine', label:'引擎配置' },
+      { key:'system', label:'系统配置' },
       { key:'model', label:'模型映射' },
       { key:'mail', label:'邮箱渠道' },
       { key:'proxy', label:'网络代理' },
@@ -69,19 +69,31 @@
 
     function renderContent() {
       const el = document.getElementById('config-content');
-      if (currentTab === 'engine') el.innerHTML = renderEngine();
+      if (currentTab === 'system') el.innerHTML = renderSystem();
       else if (currentTab === 'model') el.innerHTML = renderModel();
       else if (currentTab === 'mail') el.innerHTML = renderMail();
       else if (currentTab === 'proxy') el.innerHTML = renderProxy();
       else if (currentTab === 'keys') el.innerHTML = renderKeys();
     }
 
-    function renderEngine() {
+    function renderSystem() {
       return `
-        <div style="font-size:12px;color:var(--fg-muted);padding-bottom:8px;border-bottom:1px solid #f5f5f5;margin-bottom:16px">引擎与并发</div>
+        <div style="font-size:12px;color:var(--fg-muted);padding-bottom:8px;border-bottom:1px solid #f5f5f5;margin-bottom:16px">基础访问控制</div>
+        <div class="config-row">
+          <div><div class="config-label">APP 访问地址</div><div class="config-desc">应用对外提供服务的根 URL，格式如 https://your-domain.com</div></div>
+          <input class="config-input" style="width:280px" value="${settings.app_url||''}" placeholder="https://your-domain.com" onchange="settings.app_url=this.value">
+        </div>
+        <div class="config-row">
+          <div><div class="config-label">APP 访问密码</div><div class="config-desc">管理后台鉴权密码。修改后已有 Session 将立即失效，需重新登录。</div></div>
+          <input type="password" class="config-input" style="width:200px" value="${settings.admin_key||''}" onchange="settings.admin_key=this.value">
+        </div>
+        <div class="config-row">
+          <div><div class="config-label">默认流式回复</div><div class="config-desc">客户端未传 stream 字段时的默认行为</div></div>
+          <div class="toggle ${settings.default_stream!==false?'on':''}" onclick="this.classList.toggle('on');settings.default_stream=this.classList.contains('on')"></div>
+        </div>
         <div class="config-row">
           <div><div class="config-label">驱动引擎</div><div class="config-desc">httpx 快速直连 / browser 浏览器指纹 / hybrid 混合</div></div>
-          <select class="config-select" id="cfg-engine" onchange="settings.engine_mode=this.value">
+          <select class="config-select" onchange="settings.engine_mode=this.value">
             <option value="httpx" ${settings.engine_mode==='httpx'?'selected':''}>httpx</option>
             <option value="browser" ${settings.engine_mode==='browser'?'selected':''}>browser</option>
             <option value="hybrid" ${settings.engine_mode==='hybrid'?'selected':''}>hybrid</option>
@@ -91,14 +103,11 @@
           <div><div class="config-label">单账号并发</div><div class="config-desc">每个账号同时处理的最大请求数，1=最安全</div></div>
           <input type="number" class="config-input" value="${settings.max_inflight_per_account||1}" min="1" max="10" onchange="settings.max_inflight_per_account=+this.value">
         </div>
-        <div class="config-row">
-          <div><div class="config-label">默认流式回复</div><div class="config-desc">客户端未传 stream 字段时的默认行为</div></div>
-          <div class="toggle ${settings.default_stream!==false?'on':''}" onclick="toggleStream(this)"></div>
-        </div>
+
         <div style="font-size:12px;color:var(--fg-muted);padding-bottom:8px;border-bottom:1px solid #f5f5f5;margin:24px 0 16px">自动补号</div>
         <div class="config-row">
           <div><div class="config-label">启用自动补号</div><div class="config-desc">账号耗尽时自动触发注册补充</div></div>
-          <div class="toggle ${settings.auto_replenish?'on':''}" onclick="toggleReplenish(this)"></div>
+          <div class="toggle ${settings.auto_replenish?'on':''}" onclick="this.classList.toggle('on');settings.auto_replenish=this.classList.contains('on');document.getElementById('replenish-target').style.display=settings.auto_replenish?'':'none'"></div>
         </div>
         <div class="config-row" id="replenish-target" style="${settings.auto_replenish?'':'display:none'}">
           <div><div class="config-label">目标账号数</div><div class="config-desc">池中账号低于此数时触发补号</div></div>
@@ -143,7 +152,7 @@
         <div style="font-size:12px;color:var(--fg-muted);padding-bottom:8px;border-bottom:1px solid #f5f5f5;margin-bottom:16px">代理设置</div>
         <div class="config-row">
           <div><div class="config-label">启用代理</div><div class="config-desc">注册时使用代理绕过 WAF 限制</div></div>
-          <div class="toggle ${settings.proxy_enabled?'on':''}" onclick="toggleProxy(this)"></div>
+          <div class="toggle ${settings.proxy_enabled?'on':''}" onclick="this.classList.toggle('on');settings.proxy_enabled=this.classList.contains('on');document.getElementById('proxy-fields').style.display=settings.proxy_enabled?'':'none'"></div>
         </div>
         <div id="proxy-fields" style="${settings.proxy_enabled?'':'display:none'}">
           <div class="config-row">
@@ -186,31 +195,13 @@
       `;
     }
 
-    // Toggle handlers
-    function toggleStream(el) {
-      const on = !el.classList.contains('on');
-      el.classList.toggle('on');
-      settings.default_stream = on;
-    }
-    function toggleReplenish(el) {
-      const on = !el.classList.contains('on');
-      el.classList.toggle('on');
-      settings.auto_replenish = on;
-      document.getElementById('replenish-target').style.display = on ? '' : 'none';
-    }
-    function toggleProxy(el) {
-      const on = !el.classList.contains('on');
-      el.classList.toggle('on');
-      settings.proxy_enabled = on;
-      document.getElementById('proxy-fields').style.display = on ? '' : 'none';
-    }
-
     // Save all
     async function saveAll() {
       const payload = {
         engine_mode: settings.engine_mode,
         max_inflight_per_account: settings.max_inflight_per_account,
         default_stream: settings.default_stream,
+        admin_key: settings.admin_key,
         auto_replenish: settings.auto_replenish,
         replenish_target: settings.replenish_target,
         moemail_domain: settings.moemail_domain,
