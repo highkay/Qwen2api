@@ -93,7 +93,7 @@ async def lifespan(app: FastAPI):
         tempmail_key = getattr(_settings, "TEMPMAIL_KEY", "") or ""
         tempmail_key = tempmail_key.strip()
 
-        # 严格优先级: MoeMail > TempMail > GPTMail > VipMail > GuerrillaMail
+        # 必须有配置的邮箱渠道才能自动补号
         if moemail_domain and moemail_key:
             provider = "moemail"
         elif tempmail_domain and tempmail_key:
@@ -103,7 +103,8 @@ async def lifespan(app: FastAPI):
         elif getattr(_settings, "VIPMAIL_KEY", ""):
             provider = "vipmail"
         else:
-            provider = "guerrilla"
+            log.warning("[AutoReplenish] 未配置任何邮箱渠道，跳过自动补号")
+            return 0
 
         log.info(f"[AutoReplenish] 使用邮箱渠道: {provider} "
                  f"(moemail={'✓' if moemail_domain else '✗'}, "

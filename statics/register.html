@@ -59,7 +59,7 @@
         <div class="control-field">
           <label>邮箱渠道</label>
           <select id="reg-provider">
-            <option value="default">自动选择</option>
+            <option value="">请选择邮箱渠道</option>
             <option value="moemail">MoeMail</option>
             <option value="tempmail">TempMail</option>
             <option value="gptmail">ChatGPT邮箱</option>
@@ -138,6 +138,11 @@
       const count = +document.getElementById('reg-count').value;
       const threads = +document.getElementById('reg-threads').value;
       const provider = document.getElementById('reg-provider').value;
+
+      if (!provider) {
+        showToast('请先选择邮箱渠道');
+        return;
+      }
 
       const r = await fetch('/api/admin/accounts/batch-register', {
         method: 'POST', headers: jsonHeaders(),
