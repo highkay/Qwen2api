@@ -306,7 +306,7 @@ async def chat_completions(request: Request):
                         content = evt.get("content", "")
                         reasoning = evt.get("reasoning_content", "")
 
-                        if (phase == "thought" or reasoning) and not content:
+                        if (phase == "thought" or phase == "thinking_summary" or reasoning) and not content:
                             yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model_name, 'choices': [{'index': 0, 'delta': {'reasoning_content': reasoning or content}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
                             streamed_len += len(reasoning or content)
                             continue

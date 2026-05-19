@@ -349,11 +349,19 @@ class QwenClient:
                          or delta.get("tool_call_id")
                          or evt.get("tool_call_id")
                          or "tc_0")
+                # 提取思考内容：thinking_summary 阶段内容在 extra.summary_thought 里
+                reasoning = delta.get("thought", "") or delta.get("reasoning_content", "")
+                if not reasoning and delta.get("phase") == "thinking_summary":
+                    summary_thought = extra.get("summary_thought", {})
+                    if isinstance(summary_thought, dict):
+                        parts = summary_thought.get("content", [])
+                        if isinstance(parts, list) and parts:
+                            reasoning = "\n".join(str(p) for p in parts)
                 parsed.append({
                     "type": "delta",
                     "phase": delta.get("phase", "answer"),
                     "content": delta.get("content", ""),
-                    "reasoning_content": delta.get("thought", "") or delta.get("reasoning_content", ""),
+                    "reasoning_content": reasoning,
                     "status": delta.get("status", "") or finish_reason,
                     "extra": {**extra, "tool_call_id": tc_id},
                 })
@@ -362,11 +370,18 @@ class QwenClient:
                 tc_id = (extra.get("tool_call_id")
                          or evt.get("tool_call_id")
                          or "tc_0")
+                reasoning = evt.get("thought", "") or evt.get("reasoning_content", "")
+                if not reasoning and evt.get("phase") == "thinking_summary":
+                    summary_thought = extra.get("summary_thought", {})
+                    if isinstance(summary_thought, dict):
+                        parts = summary_thought.get("content", [])
+                        if isinstance(parts, list) and parts:
+                            reasoning = "\n".join(str(p) for p in parts)
                 parsed.append({
                     "type": "delta",
                     "phase": evt.get("phase", "answer"),
                     "content": evt.get("content", "") or evt.get("text", "") or "",
-                    "reasoning_content": evt.get("thought", "") or evt.get("reasoning_content", ""),
+                    "reasoning_content": reasoning,
                     "status": evt.get("status", ""),
                     "extra": {**extra, "tool_call_id": tc_id},
                 })
