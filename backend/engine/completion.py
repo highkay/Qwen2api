@@ -261,6 +261,7 @@ async def _stream_no_tools(
         try:
             sent_role = False
             streamed_len = 0
+            thought_sent = False  # 标记是否已发过 thought 内容
 
             async for item in _stream_items_with_keepalive(
                 client, model, current_prompt, has_custom_tools=False,
@@ -286,11 +287,13 @@ async def _stream_no_tools(
                 content = evt.get("content", "")
                 reasoning = evt.get("reasoning_content", "")
 
-                # 思考内容透传（只透传 thinking_summary 摘要，跳过原始 thought 避免重复）
-                if phase == "thought" and not content:
-                    # 原始思考流，跳过（等 thinking_summary 摘要）
-                    continue
-                if (phase == "thinking_summary" or reasoning) and not content:
+                # 思考内容透传（thought 实时流 + thinking_summary 摘要都透传）
+                if (phase == "thought" or phase == "thinking_summary" or reasoning) and not content:
+                    # 如果已发过 thought 实时流，跳过 thinking_summary 避免重复
+                    if phase == "thinking_summary" and thought_sent:
+                        continue
+                    if phase == "thought":
+                        thought_sent = True
                     yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model_name, 'choices': [{'index': 0, 'delta': {'reasoning_content': reasoning or content}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
                     streamed_len += len(reasoning or content)
                     continue
