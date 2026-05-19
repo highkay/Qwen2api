@@ -22,7 +22,7 @@ function renderHeader(active) {
   if (!header) return;
   header.innerHTML = `
     <div class="admin-header-inner">
-      <div><span class="admin-brand">qwen2api</span></div>
+      <div><span class="admin-brand">Qwen2api</span></div>
       <nav class="admin-nav">
         <a href="/admin/accounts" class="${active === 'accounts' ? 'active' : ''}">账户管理</a>
         <a href="/admin/config" class="${active === 'config' ? 'active' : ''}">配置管理</a>
