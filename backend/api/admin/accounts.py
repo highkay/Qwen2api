@@ -306,3 +306,52 @@ async def stop_register(_=Depends(_require_admin)):
     _manual_stop_flag.set()
     log.info("[Admin] 用户请求停止手动注册任务")
     return {"ok": True, "message": "停止信号已发送"}
+
+
+@router.post("/accounts/disable-memory")
+async def disable_memory_all(request: Request, _=Depends(_require_admin)):
+    """批量关闭所有账号的记忆功能"""
+    import httpx
+    pool = request.app.state.account_pool
+    accounts = pool.all_accounts()
+    success = 0
+    failed = 0
+
+    async def _disable_one(acc):
+        nonlocal success, failed
+        if not acc.token:
+            failed += 1
+            return
+        try:
+            headers = {
+                "Authorization": f"Bearer {acc.token}",
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Origin": "https://chat.qwen.ai",
+            }
+            body = {
+                "memory": {"enable_memory": False, "enable_history_memory": False},
+                "tools_enabled": {
+                    "memory_retrieval": False,
+                    "memory_update": False,
+                }
+            }
+            async with httpx.AsyncClient(timeout=10) as hc:
+                resp = await hc.post("https://chat.qwen.ai/api/v2/users/user/settings/update", headers=headers, json=body)
+            if resp.status_code == 200:
+                success += 1
+            else:
+                failed += 1
+        except Exception:
+            failed += 1
+
+    # 并发执行（限制 20 并发）
+    sem = asyncio.Semaphore(20)
+    async def _with_sem(acc):
+        async with sem:
+            await _disable_one(acc)
+
+    tasks = [_with_sem(acc) for acc in accounts]
+    await asyncio.gather(*tasks)
+    log.info(f"[Admin] 批量关闭记忆完成: success={success} failed={failed}")
+    return {"ok": True, "success": success, "failed": failed, "total": len(accounts)}

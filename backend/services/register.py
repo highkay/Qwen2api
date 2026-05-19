@@ -341,7 +341,13 @@ async def perform_batch_registration(
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                         "Origin": "https://chat.qwen.ai",
                     }
-                    body = {"memory": {"enable_memory": False, "enable_history_memory": False}}
+                    body = {
+                        "memory": {"enable_memory": False, "enable_history_memory": False},
+                        "tools_enabled": {
+                            "memory_retrieval": False,
+                            "memory_update": False,
+                        }
+                    }
                     async with httpx.AsyncClient(timeout=10) as hc:
                         await hc.post("https://chat.qwen.ai/api/v2/users/user/settings/update", headers=headers, json=body)
                     log.info(f"[Register] 已关闭新账号记忆功能: {result['email']}")

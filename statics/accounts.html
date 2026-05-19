@@ -16,6 +16,7 @@
         <div class="page-sub">管理 qwen2api 的 Qwen 账户池与运行状态</div>
       </div>
       <div class="page-actions">
+        <button class="btn btn-secondary" onclick="disableMemoryAll()" title="关闭所有账号的记忆功能">关闭记忆</button>
         <button class="btn btn-secondary" onclick="showImportModal()">导入</button>
         <button class="btn btn-primary" onclick="showAddModal()">+ 新增</button>
       </div>
@@ -346,6 +347,18 @@
       showToast(`已恢复 ${emails.length} 个`);
       selectedEmails.clear();
       fetchAccounts();
+    }
+
+    async function disableMemoryAll() {
+      if (!confirm('确认关闭所有账号的记忆功能？这将遍历所有账号并调用 Qwen API，可能需要几分钟。')) return;
+      showToast('正在批量关闭记忆...');
+      try {
+        const r = await fetch('/api/admin/accounts/disable-memory', { method: 'POST', headers: authHeaders() });
+        const d = await r.json();
+        showToast(`完成: 成功 ${d.success} / 失败 ${d.failed} / 总计 ${d.total}`);
+      } catch (e) {
+        showToast('操作失败: ' + e.message, 5000);
+      }
     }
 
     function exportJSON() {
