@@ -194,7 +194,7 @@ BUILTIN_MODELS = [
     "qwen3.7-max-preview-thinking",
     "qwen3.7-plus-preview-thinking",
     # 生图专用模型
-    "z-image",
+    "qwen-image",
 ]
 
 # 默认模型（未知模型名的 fallback）

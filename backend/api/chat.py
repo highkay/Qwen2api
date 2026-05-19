@@ -213,8 +213,8 @@ async def chat_completions(request: Request):
     log.info(f"[OAI] model={qwen_model}, stream={stream}, tools={[t.get('name') for t in tools]}, thinking={req_thinking}, prompt_len={len(prompt)}")
 
     # T2I 路由：z-image 模型强制生图，其他模型检测关键词
-    if model_name == "z-image":
-        return await _handle_t2i(request, client, history_messages, "z-image", stream)
+    if model_name == "qwen-image":
+        return await _handle_t2i(request, client, history_messages, "qwen-image", stream)
 
     media_intent = _detect_media_intent(history_messages)
     if media_intent == "t2v":
