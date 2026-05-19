@@ -56,7 +56,7 @@
         <!-- 筛选下拉 -->
         <div class="dropdown" id="filter-dropdown" style="display:inline-flex">
           <button class="toolbar-icon-btn" onclick="toggleFilterPanel()" title="筛选"><svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M4 6h16"/><path d="M7 12h10"/><path d="M10 18h4"/></svg></button>
-          <div class="dropdown-menu" id="filter-panel" style="display:none;min-width:280px;padding:12px;right:0">
+          <div class="dropdown-menu" id="filter-panel" style="display:none;min-width:420px;padding:14px 16px;right:0">
             <div id="filter-chips-panel"></div>
           </div>
         </div>
@@ -152,7 +152,7 @@
         <div class="stat-cell"><div class="stat-top"><span class="stat-label">禁用账户</span><span class="stat-icon" style="color:#6f675d"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M8.5 8.5 15.5 15.5"/></svg></span></div><div class="stat-num" style="color:#6f675d">${stats.disabled}</div></div>
       `;
 
-      // Filters - render into dropdown panel
+      // Filters - render into dropdown panel (horizontal layout like grok2api)
       const filters = [
         { key:'all', label:'全部', count:stats.total },
         { key:'active', label:'正常', count:stats.active },
@@ -161,10 +161,12 @@
         { key:'disabled', label:'禁用', count:stats.disabled },
       ];
       document.getElementById('filter-chips-panel').innerHTML = `
-        <div style="font-size:11px;color:#999;margin-bottom:8px">状态</div>
-        <div class="filter-bar" style="margin:0;flex-wrap:wrap">${filters.map(f =>
-          `<button class="filter-chip ${filter===f.key?'active':''}" onclick="setFilter('${f.key}')">${f.label} <span class="filter-chip-count">${f.count}</span></button>`
-        ).join('')}</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:12px;color:#999;flex-shrink:0;width:34px">状态</span>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">${filters.map(f =>
+            `<button class="filter-chip ${filter===f.key?'active':''}" onclick="setFilter('${f.key}')">${f.label} <span class="filter-chip-count">${f.count}</span></button>`
+          ).join('')}</div>
+        </div>
       `;
 
       // Filter + paginate
