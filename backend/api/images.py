@@ -186,6 +186,23 @@ async def create_image(request: Request):
             raise HTTPException(status_code=500, detail=detail)
 
         data = [{"url": url, "revised_prompt": prompt} for url in collected_urls[:n]]
+        # 处理 response_format
+        response_format = body.get("response_format", "url")
+        if response_format == "b64_json":
+            import httpx, base64
+            b64_data = []
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as hc:
+                for url in collected_urls[:n]:
+                    try:
+                        resp = await hc.get(url)
+                        if resp.status_code == 200:
+                            b64 = base64.b64encode(resp.content).decode()
+                            b64_data.append({"b64_json": b64, "revised_prompt": prompt})
+                        else:
+                            b64_data.append({"url": url, "revised_prompt": prompt})
+                    except Exception:
+                        b64_data.append({"url": url, "revised_prompt": prompt})
+            data = b64_data
         # 记录使用统计：每张图片计 1 次，prompt token 均摊，图片固定 1000 token
         try:
             um = request.app.state.usage_manager
