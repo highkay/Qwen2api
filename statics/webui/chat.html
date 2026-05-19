@@ -103,7 +103,7 @@
     <section class="webui-workspace">
       <div class="webui-thread" id="thread">
         <div class="webui-thread-inner" id="thread-inner">
-          <div class="webui-empty" id="empty-state">
+          <div class="webui-empty">
             <div class="webui-empty-title">Web Chat</div>
             <div class="webui-empty-text">输入一条消息开始新的会话。</div>
           </div>
@@ -225,14 +225,10 @@
 
     function renderThread() {
       const inner = document.getElementById('thread-inner');
-      const empty = document.getElementById('empty-state');
       if (messages.length === 0) {
-        inner.innerHTML = '';
-        inner.appendChild(empty);
-        empty.style.display = 'flex';
+        inner.innerHTML = `<div class="webui-empty"><div class="webui-empty-title">Web Chat</div><div class="webui-empty-text">输入一条消息开始新的会话。</div></div>`;
         return;
       }
-      empty.style.display = 'none';
       inner.innerHTML = messages.map(m => {
         if (m.role === 'user') return `<div class="webui-msg webui-msg-user"><div class="webui-bubble">${esc(m.content)}</div></div>`;
         return `<div class="webui-msg webui-msg-assistant"><div class="webui-bubble">${renderMd(m.content)}</div></div>`;
