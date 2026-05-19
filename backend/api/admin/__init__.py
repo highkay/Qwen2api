@@ -4,7 +4,7 @@ admin/ -- 管理后台 API（拆分为多个子模块）
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from backend.core.config import settings
+from backend.core.config import settings as app_settings
 
 router = APIRouter()
 
@@ -18,7 +18,7 @@ def _require_admin(request: Request):
     if not token:
         # SSE EventSource 不支持自定义 header，允许 query param
         token = request.query_params.get("key", "").strip()
-    if token != settings.ADMIN_KEY:
+    if token != app_settings.ADMIN_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
     return token
 
