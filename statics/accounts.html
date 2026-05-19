@@ -56,7 +56,7 @@
         <!-- 筛选下拉 -->
         <div class="dropdown" id="filter-dropdown" style="display:inline-flex">
           <button class="toolbar-icon-btn" onclick="toggleFilterPanel()" title="筛选"><svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M4 6h16"/><path d="M7 12h10"/><path d="M10 18h4"/></svg></button>
-          <div class="dropdown-menu" id="filter-panel" style="display:none;min-width:420px;padding:14px 16px;right:0">
+          <div class="dropdown-menu" id="filter-panel" style="display:none;padding:14px 16px;right:0;white-space:nowrap">
             <div id="filter-chips-panel"></div>
           </div>
         </div>
@@ -163,8 +163,8 @@
       document.getElementById('filter-chips-panel').innerHTML = `
         <div style="display:flex;align-items:center;gap:10px">
           <span style="font-size:12px;color:#999;flex-shrink:0;width:34px">状态</span>
-          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">${filters.map(f =>
-            `<button class="filter-chip ${filter===f.key?'active':''}" onclick="setFilter('${f.key}')">${f.label} <span class="filter-chip-count">${f.count}</span></button>`
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:nowrap">${filters.map(f =>
+            `<button class="filter-chip ${filter===f.key?'active':''}" style="min-width:auto" onclick="setFilter('${f.key}')">${f.label} <span class="filter-chip-count">${f.count}</span></button>`
           ).join('')}</div>
         </div>
       `;
