@@ -2,7 +2,7 @@ fastapi
 uvicorn[standard]
 httpx
 pydantic-settings
-camoufox[geoip]
+playwright
 tiktoken
 curl_cffi
 psutil
