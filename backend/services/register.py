@@ -13,6 +13,7 @@ import secrets
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import Optional
 
 log = logging.getLogger("qwen2api.register")
@@ -27,8 +28,11 @@ DEFAULT_PROFILE_IMAGE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkC
 # MailService 提供者配置
 MAIL_PROVIDERS = {
     "default": {"api_url": "https://mail.chatgpt.org.uk"},
+    "gptmail": {"api_url": "https://mail.chatgpt.org.uk"},
     "guerrilla": {"api_url": None},  # 使用官方 GuerrillaMail API
     "moemail": {"api_url": None},    # 从 settings 获取
+    "tempmail": {"api_url": None},   # 从 settings 获取
+    "vipmail": {"api_url": "https://maliapi.215.im/v1"},
 }
 
 
@@ -134,19 +138,30 @@ def _oauth_device_flow(session, email, cookie_header=""):
 
 def _register_single_account(provider: str = "default", moemail_domain: str = "", moemail_key: str = "",
                               tempmail_domain: str = "", tempmail_key: str = "",
-                              mail_poll_times: int = 24) -> Optional[dict]:
+                              mail_poll_times: int = 24,
+                              vipmail_key: str = "", smartmail_key: str = "") -> Optional[dict]:
     """
     注册单个 Qwen 账号，返回账号字典或 None。
     同步函数，设计为在线程池中运行。
     """
     from curl_cffi import requests as curl_requests
-    from backend.services.mail_service import MoeMailClient, TempMailClient, GuerrillaMailClient
+    from backend.services.mail_service import (
+        GPTMailClient,
+        GuerrillaMailClient,
+        MoeMailClient,
+        TempMailClient,
+        VipMailClient,
+    )
 
     # 1. 获取临时邮箱
     log.info("[Register] 正在获取临时邮箱...")
+    provider = (provider or "default").strip().lower()
     verify_url_fetcher = None   # callable() -> str | None
 
-    if provider == "moemail" and moemail_domain and moemail_key:
+    if provider == "moemail":
+        if not moemail_domain or not moemail_key:
+            log.error("[Register] MoeMail 配置缺失：请填写域名和 API 密钥")
+            return None
         # 自建 MoeMail
         moe = MoeMailClient(moemail_domain, moemail_key)
         try:
@@ -159,7 +174,10 @@ def _register_single_account(provider: str = "default", moemail_domain: str = ""
         log.info(f"[Register] MoeMail 邮箱获取成功: {email_addr}")
         verify_url_fetcher = lambda: moe.poll_for_activation_link(email_id, max_polls=mail_poll_times)
 
-    elif provider == "tempmail" and tempmail_domain and tempmail_key:
+    elif provider == "tempmail":
+        if not tempmail_domain or not tempmail_key:
+            log.error("[Register] TempMail 配置缺失：请填写域名和管理密钥")
+            return None
         # 自建 TempMail
         tmp = TempMailClient(tempmail_domain, tempmail_key)
         try:
@@ -171,6 +189,25 @@ def _register_single_account(provider: str = "default", moemail_domain: str = ""
         jwt = addr_info["jwt"]
         log.info(f"[Register] TempMail 邮箱获取成功: {email_addr}")
         verify_url_fetcher = lambda: tmp.poll_for_activation_link(jwt, max_polls=mail_poll_times)
+
+    elif provider == "vipmail":
+        if not vipmail_key:
+            log.error("[Register] VipMail 配置缺失：请填写 API Key")
+            return None
+        vip = VipMailClient(vipmail_key)
+        try:
+            addr_info = vip.create_address_sync()
+        except Exception as e:
+            log.error(f"[Register] VipMail 邮箱获取失败: {e}")
+            return None
+        email_addr = addr_info["address"]
+        mail_token = addr_info.get("token", "")
+        log.info(f"[Register] VipMail 邮箱获取成功: {email_addr}")
+        verify_url_fetcher = lambda: vip.poll_for_activation_link(
+            email_addr,
+            token=mail_token,
+            max_polls=mail_poll_times,
+        )
 
     elif provider == "guerrilla":
         # 官方 GuerrillaMail API
@@ -184,10 +221,9 @@ def _register_single_account(provider: str = "default", moemail_domain: str = ""
         log.info(f"[Register] GuerrillaMail 邮箱获取成功: {email_addr}")
         verify_url_fetcher = lambda: gm.poll_for_activation_link(max_polls=mail_poll_times)
 
-    else:
+    elif provider in ("default", "gptmail"):
         # 默认渠道：GPTMail (mail.chatgpt.org.uk) — 自动获取公共 API Key
-        from backend.services.mail_service import GPTMailClient
-        gptmail = GPTMailClient()
+        gptmail = GPTMailClient(api_key=smartmail_key)
         try:
             addr_info = gptmail.create_address_sync()
         except Exception as e:
@@ -196,6 +232,10 @@ def _register_single_account(provider: str = "default", moemail_domain: str = ""
         email_addr = addr_info["address"]
         log.info(f"[Register] GPTMail 邮箱获取成功: {email_addr}")
         verify_url_fetcher = lambda: gptmail.poll_for_activation_link(email_addr, max_polls=mail_poll_times)
+
+    else:
+        log.error(f"[Register] 未知邮箱渠道: {provider}")
+        return None
 
     # 2. 无头浏览器提交注册表单
     from backend.services.browser_register import browser_signup_sync
@@ -281,6 +321,8 @@ async def perform_batch_registration(
     moemail_key: str = "",
     tempmail_domain: str = "",
     tempmail_key: str = "",
+    vipmail_key: str = "",
+    smartmail_key: str = "",
     stop_flag: "threading.Event | None" = None,
     max_retries: int = 24,  # 每5秒查一次激活邮件，最多查几次
 ):
@@ -313,13 +355,17 @@ async def perform_batch_registration(
 
             result = await loop.run_in_executor(
                 None,
-                _register_single_account,
-                provider,
-                moemail_domain,
-                moemail_key,
-                tempmail_domain,
-                tempmail_key,
-                mail_poll_times,
+                partial(
+                    _register_single_account,
+                    provider=provider,
+                    moemail_domain=moemail_domain,
+                    moemail_key=moemail_key,
+                    tempmail_domain=tempmail_domain,
+                    tempmail_key=tempmail_key,
+                    mail_poll_times=mail_poll_times,
+                    vipmail_key=vipmail_key,
+                    smartmail_key=smartmail_key,
+                ),
             )
 
             if result and result.get("token"):

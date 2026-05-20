@@ -92,6 +92,10 @@ async def lifespan(app: FastAPI):
         tempmail_domain = tempmail_domain.strip()
         tempmail_key = getattr(_settings, "TEMPMAIL_KEY", "") or ""
         tempmail_key = tempmail_key.strip()
+        vipmail_key = getattr(_settings, "VIPMAIL_KEY", "") or ""
+        vipmail_key = vipmail_key.strip()
+        smartmail_key = getattr(_settings, "SMARTMAIL_KEY", "") or ""
+        smartmail_key = smartmail_key.strip()
 
         # 必须有配置的邮箱渠道才能自动补号
         provider = getattr(_settings, "REPLENISH_PROVIDER", "").strip()
@@ -101,7 +105,9 @@ async def lifespan(app: FastAPI):
 
         log.info(f"[AutoReplenish] 使用邮箱渠道: {provider} "
                  f"(moemail={'✓' if moemail_domain else '✗'}, "
-                 f"tempmail={'✓' if tempmail_domain else '✗'})")
+                 f"tempmail={'✓' if tempmail_domain else '✗'}, "
+                 f"vipmail={'✓' if vipmail_key else '✗'}, "
+                 f"smartmail={'✓' if smartmail_key else '✗'})")
 
         result = await perform_batch_registration(
             app.state.account_pool,
@@ -112,6 +118,8 @@ async def lifespan(app: FastAPI):
             moemail_key=moemail_key,
             tempmail_domain=tempmail_domain,
             tempmail_key=tempmail_key,
+            vipmail_key=vipmail_key,
+            smartmail_key=smartmail_key,
         )
         return result.get("success", 0)
 

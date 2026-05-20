@@ -320,6 +320,8 @@ async def batch_register(request: Request, _=Depends(_require_admin)):
             moemail_domain=settings.MOEMAIL_DOMAIN, moemail_key=settings.MOEMAIL_KEY,
             tempmail_domain=getattr(settings, "TEMPMAIL_DOMAIN", ""),
             tempmail_key=getattr(settings, "TEMPMAIL_KEY", ""),
+            vipmail_key=getattr(settings, "VIPMAIL_KEY", ""),
+            smartmail_key=getattr(settings, "SMARTMAIL_KEY", ""),
             stop_flag=_manual_stop_flag, max_retries=max_retries,
         )
     )
