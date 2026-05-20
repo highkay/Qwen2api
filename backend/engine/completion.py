@@ -263,6 +263,7 @@ async def _stream_no_tools(
             streamed_len = 0
             thought_sent = False  # 标记是否已发过 thought 内容
             reasoning_sent_len = 0  # 已发送的 reasoning 字符数（用于去重累积式推送）
+            upstream_usage = None  # 上游真实 usage（从 SSE 事件中提取）
 
             async for item in _stream_items_with_keepalive(
                 client, model, current_prompt, has_custom_tools=False,
@@ -283,6 +284,10 @@ async def _stream_no_tools(
                 evt = item["event"]
                 if evt.get("type") != "delta":
                     continue
+
+                # 提取上游真实 usage（取最后一个非空 usage，即最终统计）
+                if evt.get("usage"):
+                    upstream_usage = evt["usage"]
 
                 phase = evt.get("phase", "")
                 content = evt.get("content", "")
@@ -340,7 +345,15 @@ async def _stream_no_tools(
             # 正常结束
             if not sent_role:
                 yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model_name, 'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model_name, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]}, ensure_ascii=False)}\n\n"
+            # 最终 chunk 附带 usage（从上游真实数据提取，若无则用本地估算）
+            final_chunk = {'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model_name, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]}
+            if upstream_usage:
+                final_chunk['usage'] = {
+                    'prompt_tokens': upstream_usage.get('input_tokens', 0),
+                    'completion_tokens': upstream_usage.get('output_tokens', 0),
+                    'total_tokens': upstream_usage.get('total_tokens', 0) or (upstream_usage.get('input_tokens', 0) + upstream_usage.get('output_tokens', 0)),
+                }
+            yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
 
             # 释放账号
@@ -560,6 +573,7 @@ async def _batch(
         acc: Optional[Account] = None
         try:
             events = []
+            upstream_usage = None  # 上游真实 usage
             async for item in client.chat_stream_events_with_retry(
                 model, current_prompt, has_custom_tools=bool(tools),
                 xml_mode=force_xml_mode, exclude_accounts=excluded_accounts,
@@ -571,6 +585,9 @@ async def _batch(
                     continue
                 if item["type"] == "event":
                     events.append(item["event"])
+                    # 提取上游 usage（取最后一个非空值）
+                    if item["event"].get("usage"):
+                        upstream_usage = item["event"]["usage"]
 
             # 解析事件
             answer_text = ""
@@ -688,8 +705,15 @@ async def _batch(
                 if chat_id:
                     aio.create_task(client.delete_chat(acc.token, chat_id))
 
-            # 计算 usage
-            usage = calculate_usage(prompt, answer_text)
+            # 计算 usage — 优先使用上游真实数据
+            if upstream_usage:
+                usage = {
+                    "prompt_tokens": upstream_usage.get("input_tokens", 0),
+                    "completion_tokens": upstream_usage.get("output_tokens", 0),
+                    "total_tokens": upstream_usage.get("total_tokens", 0) or (upstream_usage.get("input_tokens", 0) + upstream_usage.get("output_tokens", 0)),
+                }
+            else:
+                usage = calculate_usage(prompt, answer_text)
 
             return {
                 "id": completion_id, "object": "chat.completion",
@@ -770,6 +794,7 @@ async def completions_raw(
         acc: Optional[Account] = None
         try:
             events = []
+            upstream_usage = None  # 上游真实 usage
             async for item in client.chat_stream_events_with_retry(
                 model, current_prompt, has_custom_tools=bool(tools),
                 xml_mode=force_xml_mode, exclude_accounts=excluded_accounts,
@@ -781,6 +806,8 @@ async def completions_raw(
                     continue
                 if item["type"] == "event":
                     events.append(item["event"])
+                    if item["event"].get("usage"):
+                        upstream_usage = item["event"]["usage"]
 
             # 解析事件
             answer_text = ""
@@ -863,8 +890,15 @@ async def completions_raw(
                 if chat_id:
                     aio.create_task(client.delete_chat(acc.token, chat_id))
 
-            # 计算 usage
-            usage = calculate_usage(prompt, answer_text)
+            # 计算 usage — 优先使用上游真实数据
+            if upstream_usage:
+                usage = {
+                    "prompt_tokens": upstream_usage.get("input_tokens", 0),
+                    "completion_tokens": upstream_usage.get("output_tokens", 0),
+                    "total_tokens": upstream_usage.get("total_tokens", 0) or (upstream_usage.get("input_tokens", 0) + upstream_usage.get("output_tokens", 0)),
+                }
+            else:
+                usage = calculate_usage(prompt, answer_text)
 
             return CompletionResult(
                 answer_text=answer_text,

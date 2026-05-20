@@ -368,6 +368,9 @@ class QwenClient:
 
         parsed = []
         for evt in events:
+            # 提取上游 usage 数据（每个 SSE event 都可能携带）
+            upstream_usage = evt.get("usage")
+
             if evt.get("choices"):
                 delta = evt["choices"][0].get("delta", {})
                 finish_reason = evt["choices"][0].get("finish_reason", "")
@@ -393,6 +396,7 @@ class QwenClient:
                     "reasoning_content": reasoning,
                     "status": delta.get("status", "") or finish_reason,
                     "extra": {**extra, "tool_call_id": tc_id},
+                    "usage": upstream_usage,
                 })
             elif evt.get("phase"):
                 extra = evt.get("extra", {})
@@ -413,6 +417,7 @@ class QwenClient:
                     "reasoning_content": reasoning,
                     "status": evt.get("status", ""),
                     "extra": {**extra, "tool_call_id": tc_id},
+                    "usage": upstream_usage,
                 })
         return parsed
 
