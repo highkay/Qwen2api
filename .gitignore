@@ -15,6 +15,7 @@ __pycache__/
 # Data and Logs
 data/*.json
 data/files/
+data/*.network-request
 logs/
 legacy/
 *legacy*.py
@@ -44,6 +45,9 @@ uv.lock
 test_upload.txt
 qwen2api总json.json
 *.json.json
+
+# Temp files
+日志
 
 # Tests and scripts
 test_*.py
