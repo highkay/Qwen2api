@@ -233,11 +233,6 @@ async def proxy_image_legacy(image_id: str):
     return FileResponse(path, media_type=get_image_mime(path),
                         headers={"Cache-Control": "public, max-age=86400"})
 
-# 托管前端构建产物（仅当 dist 存在时，即生产打包模式）
-FRONTEND_DIST = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
-if os.path.exists(FRONTEND_DIST):
-    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("backend.main:app", host="0.0.0.0", port=settings.PORT, workers=1)

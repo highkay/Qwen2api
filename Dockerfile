@@ -1,12 +1,4 @@
-# Stage 1: Build Frontend
-FROM node:20-slim AS frontend-builder
-WORKDIR /app
-COPY frontend/package*.json ./
-RUN npm install
-COPY frontend/ ./
-RUN npm run build
-
-# Stage 2: Backend + Final Image
+# Backend + Final Image
 FROM python:3.12-slim
 WORKDIR /workspace
 
@@ -61,8 +53,8 @@ RUN python -m camoufox fetch
 RUN python -m playwright install chromium
 
 COPY backend/ ./backend/
+COPY statics/ ./statics/
 COPY start.py ./
-COPY --from=frontend-builder /app/dist ./frontend/dist
 
 # Create data and logs directories
 RUN mkdir -p /workspace/data /workspace/logs
@@ -70,7 +62,6 @@ RUN mkdir -p /workspace/data /workspace/logs
 EXPOSE 7860
 
 ENV PORT=7860
-ENV FRONTEND_DIST_DIR=/workspace/frontend/dist
 ENV ACCOUNTS_FILE=/workspace/data/accounts.json
 ENV USERS_FILE=/workspace/data/users.json
 ENV CAPTURES_FILE=/workspace/data/captures.json
