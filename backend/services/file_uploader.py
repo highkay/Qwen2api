@@ -52,20 +52,32 @@ class UploadedFile:
         """转换为 Qwen chat payload 中 files 数组的元素格式"""
         file_class = _get_file_class(self.mime_type)
         ts = int(time.time() * 1000)
+        is_image = file_class == "vision"
+
+        # 图片和文档的 meta 格式不同
+        if is_image:
+            meta = {
+                "name": self.filename,
+                "size": self.size,
+                "content_type": self.mime_type,
+            }
+        else:
+            meta = {
+                "name": self.filename,
+                "size": self.size,
+                "content_type": self.mime_type,
+                "parse_meta": {"parse_status": "success"},
+            }
+
         return {
-            "type": "file",
+            "type": "image" if is_image else "file",
             "file": {
                 "created_at": ts,
                 "data": {},
                 "filename": self.filename,
                 "hash": None,
                 "id": self.file_id,
-                "meta": {
-                    "name": self.filename,
-                    "size": self.size,
-                    "content_type": self.mime_type,
-                    "parse_meta": {"parse_status": "success"},
-                },
+                "meta": meta,
                 "update_at": ts,
             },
             "id": self.file_id,
@@ -78,15 +90,18 @@ class UploadedFile:
             "size": self.size,
             "error": "",
             "file_type": self.mime_type,
-            "showType": "image" if file_class == "image" else "file",
+            "showType": "image" if is_image else "file",
             "file_class": file_class,
         }
 
 
 def _get_file_class(mime: str) -> str:
-    """根据 MIME 类型返回 Qwen 的 file_class 分类"""
+    """根据 MIME 类型返回 Qwen 的 file_class 分类
+    
+    关键：图片类型返回 "vision"（不是 "image"），这告诉 Qwen 启用视觉理解
+    """
     if mime in _IMAGE_MIMES:
-        return "image"
+        return "vision"
     if mime in _AUDIO_MIMES:
         return "audio"
     if mime in _VIDEO_MIMES:
@@ -287,7 +302,7 @@ async def upload_file(token: str, file_bytes: bytes, filename: str, mime_type: s
     return UploadedFile(
         file_id=file_id,
         filename=filename,
-        url=file_url.split("?")[0],  # 去掉签名参数，保留基础 URL
+        url=file_url,  # 保留完整的预签名 URL（含签名参数）
         mime_type=mime_type,
         size=filesize,
     )
