@@ -138,6 +138,7 @@ def _oauth_device_flow(session, email, cookie_header=""):
 
 def _register_single_account(provider: str = "default", moemail_domain: str = "", moemail_key: str = "",
                               tempmail_domain: str = "", tempmail_key: str = "",
+                              tempmail_site_password: str = "",
                               mail_poll_times: int = 24,
                               vipmail_key: str = "", smartmail_key: str = "") -> Optional[dict]:
     """
@@ -179,7 +180,7 @@ def _register_single_account(provider: str = "default", moemail_domain: str = ""
             log.error("[Register] TempMail 配置缺失：请填写域名和管理密钥")
             return None
         # 自建 TempMail
-        tmp = TempMailClient(tempmail_domain, tempmail_key)
+        tmp = TempMailClient(tempmail_domain, tempmail_key, site_password=tempmail_site_password)
         try:
             addr_info = tmp.create_address_sync()
         except Exception as e:
@@ -321,6 +322,7 @@ async def perform_batch_registration(
     moemail_key: str = "",
     tempmail_domain: str = "",
     tempmail_key: str = "",
+    tempmail_site_password: str = "",
     vipmail_key: str = "",
     smartmail_key: str = "",
     stop_flag: "threading.Event | None" = None,
@@ -362,6 +364,7 @@ async def perform_batch_registration(
                     moemail_key=moemail_key,
                     tempmail_domain=tempmail_domain,
                     tempmail_key=tempmail_key,
+                    tempmail_site_password=tempmail_site_password,
                     mail_poll_times=mail_poll_times,
                     vipmail_key=vipmail_key,
                     smartmail_key=smartmail_key,

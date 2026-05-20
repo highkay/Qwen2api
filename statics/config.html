@@ -149,7 +149,8 @@
             title: 'TempMail', section: 'tempmail',
             fields: [
               { key: 'tempmail_domain', label: '域名', type: 'text', desc: 'TempMail 自建邮箱的域名。' },
-              { key: 'tempmail_key', label: 'API Key', type: 'password', desc: 'TempMail 的 API 密钥。' },
+              { key: 'tempmail_key', label: '管理密钥', type: 'password', desc: 'TempMail 的 admin 密钥，用于创建邮箱。' },
+              { key: 'tempmail_site_password', label: '站点密码', type: 'password', desc: '开启私有站点密码时填写。留空时复用管理密钥。' },
             ]
           },
           {

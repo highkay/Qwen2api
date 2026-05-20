@@ -116,6 +116,7 @@ Via `.env` or environment variables:
 | `MOEMAIL_KEY` | - | MoeMail API key |
 | `TEMPMAIL_DOMAIN` | - | TempMail domain |
 | `TEMPMAIL_KEY` | - | TempMail API key |
+| `TEMPMAIL_SITE_PASSWORD` | - | TempMail private site password; empty means reuse `TEMPMAIL_KEY` |
 | `SMARTMAIL_KEY` | - | GPTMail key (empty = public key) |
 | `VIPMAIL_KEY` | - | YYDS (215.im) key |
 | `PROXY_URL` | - | Registration proxy URL |

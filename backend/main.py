@@ -92,6 +92,8 @@ async def lifespan(app: FastAPI):
         tempmail_domain = tempmail_domain.strip()
         tempmail_key = getattr(_settings, "TEMPMAIL_KEY", "") or ""
         tempmail_key = tempmail_key.strip()
+        tempmail_site_password = getattr(_settings, "TEMPMAIL_SITE_PASSWORD", "") or ""
+        tempmail_site_password = tempmail_site_password.strip()
         vipmail_key = getattr(_settings, "VIPMAIL_KEY", "") or ""
         vipmail_key = vipmail_key.strip()
         smartmail_key = getattr(_settings, "SMARTMAIL_KEY", "") or ""
@@ -118,6 +120,7 @@ async def lifespan(app: FastAPI):
             moemail_key=moemail_key,
             tempmail_domain=tempmail_domain,
             tempmail_key=tempmail_key,
+            tempmail_site_password=tempmail_site_password,
             vipmail_key=vipmail_key,
             smartmail_key=smartmail_key,
         )

@@ -25,6 +25,7 @@ async def get_settings(_=Depends(_require_admin)):
         "moemail_key": settings.MOEMAIL_KEY,
         "tempmail_domain": settings.TEMPMAIL_DOMAIN,
         "tempmail_key": settings.TEMPMAIL_KEY,
+        "tempmail_site_password": getattr(settings, "TEMPMAIL_SITE_PASSWORD", ""),
         "smartmail_key": getattr(settings, "SMARTMAIL_KEY", ""),
         "vipmail_key": getattr(settings, "VIPMAIL_KEY", ""),
         "auto_replenish": settings.AUTO_REPLENISH,
@@ -69,6 +70,7 @@ async def get_default_settings(_=Depends(_require_admin)):
         "moemail_key": "",
         "tempmail_domain": "",
         "tempmail_key": "",
+        "tempmail_site_password": "",
         "smartmail_key": "",
         "vipmail_key": "",
         "auto_replenish": False,
@@ -127,6 +129,8 @@ async def update_settings(request: Request, _=Depends(_require_admin)):
         settings.TEMPMAIL_DOMAIN = body["tempmail_domain"]
     if "tempmail_key" in body:
         settings.TEMPMAIL_KEY = body["tempmail_key"]
+    if "tempmail_site_password" in body:
+        settings.TEMPMAIL_SITE_PASSWORD = str(body["tempmail_site_password"]).strip()
     if "smartmail_key" in body:
         settings.SMARTMAIL_KEY = str(body["smartmail_key"]).strip()
     if "vipmail_key" in body:

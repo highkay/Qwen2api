@@ -116,6 +116,7 @@ python start.py
 | `MOEMAIL_KEY` | - | MoeMail 密钥 |
 | `TEMPMAIL_DOMAIN` | - | TempMail 域名 |
 | `TEMPMAIL_KEY` | - | TempMail 密钥 |
+| `TEMPMAIL_SITE_PASSWORD` | - | TempMail 私有站点密码，留空则复用 `TEMPMAIL_KEY` |
 | `SMARTMAIL_KEY` | - | GPTMail 密钥（留空用公共密钥） |
 | `VIPMAIL_KEY` | - | YYDS (215.im) 密钥 |
 | `PROXY_URL` | - | 注册代理地址 |

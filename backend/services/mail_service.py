@@ -196,9 +196,22 @@ class TempMailClient:
     收件查询: GET  /api/mails?limit=5  (Authorization: Bearer <jwt>)
     """
 
-    def __init__(self, domain: str, admin_key: str):
+    def __init__(self, domain: str, admin_key: str, site_password: str = ""):
         self.domain = domain.rstrip("/")
         self.admin_key = admin_key
+        self.site_password = (site_password or admin_key or "").strip()
+
+    def _admin_headers(self) -> dict:
+        headers = {"x-admin-auth": self.admin_key, "Content-Type": "application/json"}
+        if self.site_password:
+            headers["x-custom-auth"] = self.site_password
+        return headers
+
+    def _inbox_headers(self, jwt: str) -> dict:
+        headers = {"Authorization": f"Bearer {jwt}"}
+        if self.site_password:
+            headers["x-custom-auth"] = self.site_password
+        return headers
 
     def create_address_sync(self, name: str | None = None) -> dict:
         """同步创建临时邮箱（供线程池使用）"""
@@ -207,7 +220,7 @@ class TempMailClient:
             resp = client.post(
                 f"{self.domain}/admin/new_address",
                 json={"enablePrefix": False, "name": name, "domain": ""},
-                headers={"x-admin-auth": self.admin_key, "Content-Type": "application/json"},
+                headers=self._admin_headers(),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -227,8 +240,9 @@ class TempMailClient:
             try:
                 with httpx.Client(timeout=10) as client:
                     resp = client.get(
-                        f"{self.domain}/api/mails?limit=5",
-                        headers={"Authorization": f"Bearer {jwt}"},
+                        f"{self.domain}/api/mails",
+                        params={"limit": 5, "offset": 0},
+                        headers=self._inbox_headers(jwt),
                     )
                     if resp.status_code == 200:
                         data = resp.json()
@@ -256,7 +270,7 @@ class TempMailClient:
             resp = await client.post(
                 f"{self.domain}/admin/new_address",
                 json={"enablePrefix": False, "name": name, "domain": ""},
-                headers={"x-admin-auth": self.admin_key, "Content-Type": "application/json"},
+                headers=self._admin_headers(),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -273,8 +287,9 @@ class TempMailClient:
         while asyncio.get_event_loop().time() < deadline:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(
-                    f"{self.domain}/api/mails?limit=5",
-                    headers={"Authorization": f"Bearer {jwt}"},
+                    f"{self.domain}/api/mails",
+                    params={"limit": 5, "offset": 0},
+                    headers=self._inbox_headers(jwt),
                 )
                 if resp.status_code == 200:
                     data = resp.json()
@@ -301,7 +316,8 @@ def get_mail_client(provider: str, settings):
         key = settings.TEMPMAIL_KEY
         if not domain or not key:
             raise ValueError("TempMail 配置缺失：请在系统设置中填写域名和管理密钥。")
-        return TempMailClient(domain, key)
+        site_password = getattr(settings, "TEMPMAIL_SITE_PASSWORD", "")
+        return TempMailClient(domain, key, site_password=site_password)
     elif provider == "gptmail":
         key = getattr(settings, "SMARTMAIL_KEY", "")
         return GPTMailClient(api_key=key)
@@ -494,6 +510,21 @@ class VipMailClient:
     def __init__(self, api_key: str):
         self._api_key = api_key
 
+    @staticmethod
+    def _error_message(resp: httpx.Response) -> str:
+        try:
+            data = resp.json()
+        except Exception:
+            text = resp.text.strip()
+            return text[:200] if text else f"HTTP {resp.status_code}"
+        if isinstance(data, dict):
+            error = data.get("error") or data.get("message") or f"HTTP {resp.status_code}"
+            error_code = data.get("errorCode")
+            if error_code:
+                return f"{error} ({error_code})"
+            return str(error)
+        return f"HTTP {resp.status_code}"
+
     def create_address_sync(self, prefix: str = "") -> dict:
         """同步创建临时邮箱。"""
         headers = {"X-API-Key": self._api_key, "Content-Type": "application/json"}
@@ -502,7 +533,8 @@ class VipMailClient:
             body["localPart"] = prefix
         with httpx.Client(timeout=15) as client:
             resp = client.post(f"{self.BASE_URL}/accounts", json=body, headers=headers)
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                raise Exception(f"[VipMail] 创建邮箱失败: {self._error_message(resp)}")
             data = resp.json()
             if not data.get("success"):
                 raise Exception(f"[VipMail] 创建邮箱失败: {data.get('error', 'Unknown')}")
