@@ -85,3 +85,4 @@ QwenGateway/gw.log
 QwenGateway/gw_err.log
 QwenGateway/debug.log
 QwenGateway/local_start.bat
+.ace-tool/
