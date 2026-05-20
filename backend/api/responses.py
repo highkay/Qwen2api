@@ -183,6 +183,22 @@ async def openai_responses(request: Request):
     created = int(time.time())
     log.info(f"[Responses] model={qwen_model} stream={stream} tools={[t['name'] for t in tool_defs]}")
 
+    # 多模态文件上传
+    uploaded_files = None
+    from backend.services.file_uploader import extract_files_from_messages, upload_files_concurrent
+    try:
+        file_data = await extract_files_from_messages(messages)
+        if file_data:
+            _acc = await client.account_pool.acquire_wait(timeout=30)
+            if _acc:
+                try:
+                    uploaded = await upload_files_concurrent(_acc.token, file_data)
+                    uploaded_files = [f.to_payload() for f in uploaded]
+                finally:
+                    client.account_pool.release(_acc)
+    except Exception as e:
+        log.warning(f"[Responses] multimodal upload failed: {e}")
+
     # 调用统一执行器
     result = await completions_raw(
         client=client,
@@ -191,6 +207,7 @@ async def openai_responses(request: Request):
         tools=tool_defs,
         thinking=req_thinking,
         history_messages=messages,
+        files=uploaded_files,
     )
 
     # 记录使用统计

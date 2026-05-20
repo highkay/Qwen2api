@@ -783,6 +783,7 @@ async def completions_raw(
     tools: list[dict],
     thinking: Optional[bool],
     history_messages: list,
+    files: list[dict] = None,
 ) -> CompletionResult:
     """协议无关的 completion 执行器（非流式）。
 
@@ -803,7 +804,7 @@ async def completions_raw(
             async for item in client.chat_stream_events_with_retry(
                 model, current_prompt, has_custom_tools=bool(tools),
                 xml_mode=force_xml_mode, exclude_accounts=excluded_accounts,
-                thinking=thinking
+                thinking=thinking, files=files
             ):
                 if item["type"] == "meta":
                     chat_id = item["chat_id"]
