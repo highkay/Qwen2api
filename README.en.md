@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="logo.svg" width="120" alt="qwen2api"/>
+  <img src="logo.svg" width="120" alt="Qwen2api"/>
 </p>
 
-<h1 align="center">qwen2api</h1>
+<h1 align="center">Qwen2api</h1>
 
 <p align="center">
   <a href="https://github.com/jiujiu532/Qwen2api/actions/workflows/docker-publish.yml">
@@ -23,19 +23,21 @@
 
 ## Overview
 
-qwen2api exposes Alibaba's Qwen (Tongyi Qianwen) web interface as standard API endpoints. It features multi-account pool rotation, automatic account registration, tool calling, streaming output, and works directly with Cherry Studio, Cursor, Claude Code, Cline, New-API, and other clients.
+Qwen2api exposes Alibaba's Qwen (Tongyi Qianwen) web interface as standard API endpoints. Multi-account pool rotation, automatic registration, tool calling, streaming output -- works directly with Cherry Studio, Cursor, Claude Code, Cline, New-API, and other clients.
 
 ## Key Features
 
 - **Multi-protocol** -- OpenAI Chat Completions / Responses API / Anthropic Messages / Gemini generateContent
-- **Account pool scheduling** -- Min-Heap priority scheduling, 6-state lifecycle management, circuit breaker auto-fuse
-- **Auto registration** -- MoeMail / TempMail / GuerrillaMail channels, emergency registration on account exhaustion
-- **Tool calling** -- Native FC first + XML Fallback, streaming leak-prevention state machine, loop detection
-- **Thinking mode** -- Model name suffix control (-thinking / -nothinking) or reasoning_effort parameter override
-- **Image generation** -- OpenAI DALL-E compatible, auto-detects user intent and routes to T2I
-- **Admin panel** -- Built-in React Web UI with real-time SSE events, account/key/settings/stats management
-- **Multi-engine** -- httpx direct (fast) / Camoufox browser fingerprint (anti-detection) / hybrid mode
-- **Fault tolerance** -- Auto retry with account rotation on upstream failure, NativeBlock detection with XML fallback
+- **Account pool** -- Min-Heap priority scheduling, 6-state lifecycle, circuit breaker auto-fuse
+- **Auto registration** -- MoeMail / TempMail / GuerrillaMail / GPTMail / YYDS (5 channels)
+- **Tool calling** -- Native FC first + XML Fallback, streaming leak-prevention, loop detection
+- **Thinking mode** -- Model suffix (-thinking / -nothinking) or reasoning_effort parameter
+- **Image generation** -- OpenAI DALL-E compatible, auto intent detection routes to T2I
+- **Accurate token stats** -- Extracts real usage from upstream SSE, not local estimation
+- **Admin panel** -- Pure HTML admin UI, accounts/keys/settings/cache/register management
+- **WebUI** -- Built-in web chat with multi-session and thinking display
+- **Multi-engine** -- httpx direct (fast) / Camoufox browser (anti-detection) / hybrid
+- **Fault tolerance** -- Auto retry with account rotation, NativeBlock detection with XML fallback
 
 ## Supported Endpoints
 
@@ -52,31 +54,19 @@ qwen2api exposes Alibaba's Qwen (Tongyi Qianwen) web interface as standard API e
 
 ## Available Models
 
-### Native Qwen Models
-
 | Model | Description |
 |-------|-------------|
 | `qwen3.6-plus` | Primary model, auto thinking |
 | `qwen3.6-plus-thinking` | Force deep thinking |
-| `qwen3.6-plus-nothinking` | Fast mode |
+| `qwen3.6-plus-nothinking` | Fast mode, no thinking |
 | `qwen3.6-max-preview` | High performance preview |
 | `qwen3.6-27b` | Lightweight |
-| `qwen3.7-max-preview` | 3.7 series (thinking only) |
-| `qwen3.7-plus-preview` | 3.7 Plus preview |
+| `qwen3.6-27b-nothinking` | Lightweight fast mode |
+| `qwen3.7-max-preview-thinking` | 3.7 Max preview (forced thinking) |
+| `qwen3.7-plus-preview-thinking` | 3.7 Plus preview (forced thinking) |
+| `qwen-image` | Image generation |
 
-All models support `-thinking` / `-nothinking` suffix.
-
-### Built-in Aliases
-
-Use common model names directly without configuration:
-
-```
-gpt-4o / gpt-4o-mini / gpt-4.1 / gpt-3.5-turbo
-o1 / o3 / o3-mini / o4-mini
-claude-3-5-sonnet-latest / claude-sonnet-4-20250514 / claude-3-opus-latest
-gemini-2.5-pro / gemini-2.5-flash / gemini-2.0-flash
-deepseek-chat / deepseek-reasoner
-```
+All models are real Qwen built-in models with no alias mapping.
 
 ## Quick Start
 
@@ -104,6 +94,7 @@ docker-compose up -d
 ```bash
 # Python 3.12+
 pip install -r backend/requirements.txt
+playwright install chromium  # Required for registration
 python start.py
 ```
 
@@ -117,16 +108,20 @@ Via `.env` or environment variables:
 |----------|---------|-------------|
 | `ADMIN_KEY` | `123456` | Admin panel key |
 | `PORT` | `7860` | Service port |
-| `ENGINE_MODE` | `hybrid` | httpx / browser / hybrid |
+| `ENGINE_MODE` | `httpx` | httpx / browser / hybrid |
 | `AUTO_REPLENISH` | `false` | Auto registration toggle |
 | `REPLENISH_TARGET` | `30` | Target account count |
+| `REPLENISH_PROVIDER` | - | Registration mail channel |
 | `MOEMAIL_DOMAIN` | - | MoeMail domain |
 | `MOEMAIL_KEY` | - | MoeMail API key |
 | `TEMPMAIL_DOMAIN` | - | TempMail domain |
 | `TEMPMAIL_KEY` | - | TempMail API key |
+| `SMARTMAIL_KEY` | - | GPTMail key (empty = public key) |
+| `VIPMAIL_KEY` | - | YYDS (215.im) key |
 | `PROXY_URL` | - | Registration proxy URL |
-| `NATIVE_TOOL_PASSTHROUGH` | `true` | Prefer Qwen native FC |
-| `MAX_INFLIGHT_PER_ACCOUNT` | `1` | Max concurrent per account |
+| `PROXY_ENABLED` | `false` | Enable outbound proxy |
+| `IMAGE_FORMAT` | `local_md` | Image return format |
+| `DEFAULT_STREAM` | `true` | Default streaming output |
 
 See [.env.example](.env.example) for full configuration.
 
@@ -145,19 +140,6 @@ curl http://localhost:7860/v1/chat/completions \
   }'
 ```
 
-### Anthropic Format
-
-```bash
-curl http://localhost:7860/v1/messages \
-  -H "x-api-key: your-api-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "claude-3-5-sonnet-latest",
-    "messages": [{"role": "user", "content": "Hello"}],
-    "max_tokens": 4096
-  }'
-```
-
 ### Tool Calling
 
 ```bash
@@ -166,42 +148,29 @@ curl http://localhost:7860/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "qwen3.6-plus-nothinking",
-    "messages": [{"role": "user", "content": "What is the weather in Beijing?"}],
-    "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}}],
-    "stream": true
+    "messages": [{"role": "user", "content": "Weather in Beijing?"}],
+    "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}}]
   }'
 ```
 
-## Project Structure
+### Image Generation
 
+```bash
+curl http://localhost:7860/v1/images/generations \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "qwen-image", "prompt": "a cute cat", "size": "1024x1024"}'
 ```
-qwen2api/
-├── backend/
-│   ├── api/              # Route layer (thin, parsing + formatting)
-│   │   ├── chat.py           # OpenAI Chat Completions
-│   │   ├── anthropic.py      # Anthropic Messages
-│   │   ├── gemini.py         # Gemini generateContent
-│   │   ├── responses.py      # OpenAI Responses API
-│   │   ├── images.py         # Image generation
-│   │   └── admin/            # Admin panel (accounts/keys/settings/stats)
-│   ├── engine/           # Core engine (business logic)
-│   │   └── completion.py     # Unified Completion Executor
-│   ├── core/             # Infrastructure
-│   │   ├── account_pool.py   # Account pool scheduling
-│   │   ├── config.py         # Configuration
-│   │   ├── auth.py           # API authentication
-│   │   └── hybrid_engine.py  # HTTP engine
-│   └── services/         # Business services
-│       ├── qwen_client.py    # Qwen upstream client
-│       ├── tool_parser.py    # Tool call parsing
-│       ├── prompt_builder.py # Prompt building
-│       └── register.py       # Auto registration
-├── frontend/             # React admin panel
-├── data/                 # Runtime data
-├── Dockerfile
-├── docker-compose.yml
-└── start.py
-```
+
+## Admin Panel
+
+| Page | Path | Function |
+|------|------|----------|
+| Accounts | `/admin/accounts` | Add/delete/verify/disable, batch import/export, disable memory |
+| Settings | `/admin/config` | Engine/mail/proxy/keys/timeout/image format |
+| Register | `/admin/register` | Batch registration, multi-channel, SSE progress |
+| Cache | `/admin/cache` | Image cache stats and cleanup |
+| WebUI | `/webui/chat` | Built-in chat interface |
 
 ## Client Integration
 
