@@ -5,8 +5,9 @@ import random
 import time
 import uuid
 from typing import Optional, Any
-from backend.core.account_pool import AccountPool, Account
+from backend.core.account_pool import AccountPool, Account, LocalBackpressureError
 from backend.core.config import settings
+from backend.core.qwen_headers import BASE_URL, qwen_api_headers
 from backend.services.auth_resolver import AuthResolver
 
 log = logging.getLogger("qwen2api.client")
@@ -65,10 +66,16 @@ class QwenClient:
                 urls.append(v)
         return urls
 
-    async def create_chat(self, token: str, model: str, chat_type: str = "t2t") -> str:
-        ts = int(time.time())
-        body = {"title": f"api_{ts}", "models": [model], "chat_mode": "normal",
-                "chat_type": chat_type, "timestamp": ts}
+    async def create_chat(self, token: str, model: str, chat_mode: str = "t2t") -> str:
+        ts = int(time.time() * 1000)
+        body = {
+            "title": f"api_{ts}",
+            "models": [model],
+            "chat_mode": chat_mode,
+            "chat_type": chat_mode,
+            "timestamp": ts,
+            "project_id": "",
+        }
 
         # chat 生命周期接口也优先走浏览器，更贴近真人使用路径
         if hasattr(self.engine, "browser_engine") and getattr(self.engine, "browser_engine") is not None:
@@ -140,20 +147,12 @@ class QwenClient:
             return False
         try:
             import httpx
-            from backend.services.auth_resolver import BASE_URL
-            headers = {
-                "Authorization": f"Bearer {token}",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "Referer": "https://chat.qwen.ai/",
-                "Origin": "https://chat.qwen.ai",
-            }
+            headers = qwen_api_headers(token, content_type="application/json", accept="application/json")
             body = {"memory": {"enable_memory": False, "enable_history_memory": False}}
             async with httpx.AsyncClient(timeout=15) as hc:
                 resp = await hc.post(f"{BASE_URL}/api/v2/users/user/settings/update", headers=headers, json=body)
             if resp.status_code == 200:
-                log.info(f"[QwenClient] 已关闭账号记忆功能")
+                log.info("[QwenClient] 已关闭账号记忆功能")
                 return True
             else:
                 log.warning(f"[QwenClient] 关闭记忆失败: status={resp.status_code}")
@@ -169,18 +168,7 @@ class QwenClient:
 
         try:
             import httpx
-            from backend.services.auth_resolver import BASE_URL
-
-            # 伪造浏览器指纹，避免被 Aliyun WAF 拦截
-            headers = {
-                "Authorization": f"Bearer {token}",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                "Referer": "https://chat.qwen.ai/",
-                "Origin": "https://chat.qwen.ai",
-                "Connection": "keep-alive"
-            }
+            headers = qwen_api_headers(token, extra={"connection": "keep-alive"})
 
             async with httpx.AsyncClient(timeout=15) as hc:
                 resp = await hc.get(
@@ -199,7 +187,7 @@ class QwenClient:
                 # 如果遇到阿里云 WAF 拦截，通常是因为 httpx 直接请求被墙，或者 token 本身就是正常的。
                 # 由于这是为了快速验证，如果被 WAF 拦截 (HTML)，我们姑且假定它是活着的，交给后面的浏览器引擎去真实处理
                 if "aliyun_waf" in resp.text.lower() or "<!doctype" in resp.text.lower():
-                    log.info(f"[verify_token] 遇到 WAF 拦截页面，放行交给底层无头浏览器引擎处理。")
+                    log.info("[verify_token] 遇到 WAF 拦截页面，放行交给底层无头浏览器引擎处理。")
                     return True
                 return False
         except Exception as e:
@@ -209,16 +197,7 @@ class QwenClient:
     async def list_models(self, token: str) -> list:
         try:
             import httpx
-            from backend.services.auth_resolver import BASE_URL
-
-            headers = {
-                "Authorization": f"Bearer {token}",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "application/json, text/plain, */*",
-                "Referer": "https://chat.qwen.ai/",
-                "Origin": "https://chat.qwen.ai",
-                "Connection": "keep-alive"
-            }
+            headers = qwen_api_headers(token, extra={"connection": "keep-alive"})
 
             async with httpx.AsyncClient(timeout=10) as hc:
                 resp = await hc.get(
@@ -239,18 +218,21 @@ class QwenClient:
                         has_custom_tools: bool = False,
                         enable_native_fc: Optional[bool] = None,
                         thinking: Optional[bool] = None,
-                        files: list[dict] = None) -> dict:
-        ts = int(time.time())
+                        files: list[dict] = None,
+                        chat_mode: str = "t2t") -> dict:
+        ts = int(time.time() * 1000)
         # has_custom_tools=True: 关闭思考/搜索/插件（适用于任何工具调用模式）
         # enable_native_fc: 独立控制是否开启 Qwen 平台原生 function_calling
         # thinking: 显式控制思考模式（None=自动，True=强制开，False=强制关）
         if enable_native_fc is None:
             enable_native_fc = bool(has_custom_tools and settings.NATIVE_TOOL_PASSTHROUGH)
+        is_media_mode = chat_mode in ("t2i", "t2v")
+        is_deep_research = chat_mode == "deep_research"
         # 思考模式决策：
         # thinking=True → 强制开启思考
         # thinking=False → 强制关闭思考（快速模式）
         # thinking=None → 自动模式（有工具时关闭，无工具时让 Qwen 自动决定）
-        if has_custom_tools:
+        if has_custom_tools or is_media_mode:
             think_on = False
             think_mode = "off"
         elif thinking is True:
@@ -266,31 +248,35 @@ class QwenClient:
         feature_config = {
             "thinking_enabled": think_on,
             "output_schema": "phase",
-            "research_mode": "normal",
+            "research_mode": "deep" if is_deep_research else "normal",
             "auto_thinking": think_on and think_mode == "Auto",
             "thinking_mode": think_mode,
             "thinking_format": "summary",
-            "auto_search": not has_custom_tools,
-            "code_interpreter": not has_custom_tools,
+            "auto_search": False if is_media_mode else (True if is_deep_research else not has_custom_tools),
+            "code_interpreter": False if is_media_mode else not has_custom_tools,
             "function_calling": enable_native_fc,
             "plugins_enabled": False if has_custom_tools else True,
             "memory": False,
         }
+        if chat_mode == "t2i":
+            feature_config["image_generation"] = True
+        if chat_mode == "t2v":
+            feature_config["video_generation"] = True
         return {
             "stream": True, "version": "2.1", "incremental_output": True,
-            "chat_id": chat_id, "chat_mode": "normal", "model": model, "parent_id": None,
+            "chat_id": chat_id, "chat_mode": chat_mode, "model": model, "parent_id": None,
             "messages": [{
                 "fid": str(uuid.uuid4()), "parentId": None, "childrenIds": [str(uuid.uuid4())],
                 "role": "user", "content": content, "user_action": "chat", "files": files or [],
-                "timestamp": ts, "models": [model], "chat_type": "t2t",
+                "timestamp": ts, "models": [model], "chat_type": chat_mode,
                 "feature_config": feature_config,
-                "extra": {"meta": {"subChatType": "t2t"}}, "sub_chat_type": "t2t", "parent_id": None,
+                "extra": {"meta": {"subChatType": chat_mode}}, "sub_chat_type": chat_mode, "parent_id": None,
             }],
             "timestamp": ts,
         }
 
     def _build_image_payload(self, chat_id: str, model: str, prompt: str, aspect_ratio: str = "1:1") -> dict:
-        ts = int(time.time())
+        ts = int(time.time() * 1000)
         # Map ratio → pixel dimensions (Wanx / Flux common sizes)
         ratio_to_size: dict[str, str] = {
             "1:1":  "1024*1024",
@@ -305,6 +291,7 @@ class QwenClient:
         feature_config = {
             "thinking_enabled": False,
             "output_schema": "phase",
+            "research_mode": "normal",
             "auto_thinking": False,
             "thinking_mode": "off",
             "auto_search": False,
@@ -321,7 +308,7 @@ class QwenClient:
             "version": "2.1",
             "incremental_output": True,
             "chat_id": chat_id,
-            "chat_mode": "normal",
+            "chat_mode": "t2i",
             "model": model,
             "parent_id": None,
             "messages": [{
@@ -427,7 +414,8 @@ class QwenClient:
                                               xml_mode: bool = False,
                                               exclude_accounts: Optional[set[str]] = None,
                                               thinking: Optional[bool] = None,
-                                              files: list[dict] = None):
+                                              files: list[dict] = None,
+                                              chat_mode: str = "t2t"):
         """无感容灾重试逻辑：上游挂了自动换号"""
         exclude = set(exclude_accounts or set())
         # xml_mode: 有工具但不用 Qwen 原生 FC，用 XML prompt 注入
@@ -435,19 +423,26 @@ class QwenClient:
         effective_has_tools = has_custom_tools or xml_mode
         enable_native_fc = False if xml_mode else None  # None = 走默认逻辑
         for attempt in range(settings.MAX_RETRIES):
-            acc = await self.account_pool.acquire_wait(timeout=60, exclude=exclude)
+            try:
+                acc = await self.account_pool.acquire_wait(
+                    timeout=getattr(settings, "ACCOUNT_ACQUIRE_TIMEOUT", 60),
+                    exclude=exclude,
+                )
+            except LocalBackpressureError as e:
+                raise Exception(f"local_backpressure: {e}") from e
             if not acc:
                 pool_status = self.account_pool.status()
                 raise Exception(
                     "No available accounts in pool "
                     f"(total={pool_status['total']}, valid={pool_status['valid']}, "
                     f"invalid={pool_status['invalid']}, activation_pending={pool_status.get('activation_pending', 0)}, "
-                    f"rate_limited={pool_status['rate_limited']}, in_use={pool_status['in_use']}, waiting={pool_status['waiting']})"
+                    f"rate_limited={pool_status['rate_limited']}, in_use={pool_status['in_use']}, "
+                    f"waiting={pool_status['waiting']}, queued={pool_status.get('queued', 0)})"
                 )
 
             chat_id: Optional[str] = None
             try:
-                log.info(f"[重试 {attempt+1}/{settings.MAX_RETRIES}] 获取账号：account={acc.email} model={model} tools={has_custom_tools} xml_mode={xml_mode} exclude={sorted(exclude)}")
+                log.info(f"[重试 {attempt+1}/{settings.MAX_RETRIES}] 获取账号：account={acc.email} model={model} chat_mode={chat_mode} tools={has_custom_tools} xml_mode={xml_mode} exclude={sorted(exclude)}")
                 # 本地节流：大池子（>50 账号）时跳过 jitter，小池子时保留防检测
                 pool_size = len(self.account_pool._accounts) if hasattr(self.account_pool, '_accounts') else 100
                 if pool_size < 50:
@@ -459,9 +454,18 @@ class QwenClient:
                     if wait_s > 0:
                         log.debug(f"[节流] 账号冷却等待：account={acc.email} wait={wait_s:.2f}s (含 jitter {jitter_ms}ms)")
                         await asyncio.sleep(wait_s)
-                chat_id = await self.create_chat(acc.token, model)
+                chat_id = await self.create_chat(acc.token, model, chat_mode=chat_mode)
                 self.active_chat_ids.add(chat_id)
-                payload = self._build_payload(chat_id, model, content, effective_has_tools, enable_native_fc, thinking, files=files)
+                payload = self._build_payload(
+                    chat_id,
+                    model,
+                    content,
+                    effective_has_tools,
+                    enable_native_fc,
+                    thinking,
+                    files=files,
+                    chat_mode=chat_mode,
+                )
                 log.info(
                     f"[重试 {attempt+1}/{settings.MAX_RETRIES}] 已创建会话：account={acc.email} chat_id={chat_id} "
                     f"engine={self.engine.__class__.__name__} function_calling={payload['messages'][0]['feature_config'].get('function_calling')} "
@@ -497,7 +501,7 @@ class QwenClient:
                                     yield {"type": "event", "event": evt}
                     elif "body" in chunk_result and chunk_result["body"] and chunk_result["body"] != "streamed":
                         buffer += chunk_result["body"]
-                
+
                 if buffer:
                     events = self.parse_sse_chunk(buffer)
                     for evt in events:
@@ -546,7 +550,7 @@ class QwenClient:
 
                 self.account_pool.release(acc)
                 log.warning(f"[重试 {attempt+1}/{settings.MAX_RETRIES}] 账号失败，准备重试：account={acc.email} error={e}")
-                
+
         raise Exception(f"All {settings.MAX_RETRIES} attempts failed. Please check upstream accounts.")
 
     def _extract_urls_from_extra(self, extra: dict) -> list[str]:
@@ -595,7 +599,7 @@ class QwenClient:
 
     async def image_generate_with_retry(self, model: str, prompt: str, aspect_ratio: str = "1:1", exclude_accounts: Optional[set[str]] = None) -> tuple[str, "Account", str]:
         """调用千问 T2I 生成图片，返回 (原始响应文本, 使用的账号, chat_id)
-        
+
         轮询策略：
         - 每次失败自动将账号加入排除列表，保证下次重试使用不同账号
         - RateLimited / 每日上限 → 标记限流，冷却 30 分钟
@@ -606,7 +610,13 @@ class QwenClient:
         last_error: Optional[Exception] = None
 
         for attempt in range(settings.MAX_RETRIES):
-            acc = await self.account_pool.acquire_wait(timeout=60, exclude=exclude)
+            try:
+                acc = await self.account_pool.acquire_wait(
+                    timeout=getattr(settings, "ACCOUNT_ACQUIRE_TIMEOUT", 60),
+                    exclude=exclude,
+                )
+            except LocalBackpressureError as exc:
+                raise Exception(f"Local backpressure: {exc}") from exc
             if not acc:
                 pool_status = self.account_pool.status()
                 raise Exception(
@@ -618,7 +628,7 @@ class QwenClient:
             log.info(f"[T2I] 尝试 {attempt+1}/{settings.MAX_RETRIES}，使用账号 {acc.email}")
             chat_id: Optional[str] = None
             try:
-                chat_id = await self.create_chat(acc.token, model, chat_type="t2t")
+                chat_id = await self.create_chat(acc.token, model, chat_mode="t2i")
                 self.active_chat_ids.add(chat_id)
                 payload = self._build_image_payload(chat_id, model, prompt, aspect_ratio)
 
@@ -724,7 +734,7 @@ class QwenClient:
             except Exception as e:
                 if chat_id:
                     self.active_chat_ids.discard(chat_id)  # type: ignore[arg-type]
-                
+
                 err_msg = str(e)
                 err_lower = err_msg.lower()
                 last_error = e

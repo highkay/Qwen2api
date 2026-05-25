@@ -11,23 +11,22 @@ import logging
 import uuid
 import time
 import re
-from typing import Optional
 
 from backend.services.qwen_client import QwenClient
 from backend.services.token_calc import calculate_usage
 from backend.services.prompt_builder import messages_to_prompt
-from backend.core.config import resolve_model, resolve_model_thinking, settings, IMAGE_MODEL_DEFAULT
-from backend.engine.completion import completions
+from backend.core.config import resolve_model_request, settings, IMAGE_MODEL_DEFAULT
+from backend.engine.completion import (
+    _extract_blocked_tool_names as _extract_blocked_tool_names,  # noqa: F401
+    _has_recent_unchanged_read_result as _has_recent_unchanged_read_result,  # noqa: F401
+    _stream_items_with_keepalive as _stream_items_with_keepalive,  # noqa: F401
+    completions,
+)
 
 log = logging.getLogger("qwen2api.chat")
 router = APIRouter()
 
 # 兼容性 re-export（anthropic.py / gemini.py 依赖这些）
-from backend.engine.completion import (
-    _stream_items_with_keepalive,
-    _extract_blocked_tool_names,
-    _has_recent_unchanged_read_result,
-)
 
 
 # ============================================================================
@@ -89,7 +88,7 @@ def _extract_last_user_text(messages: list) -> str:
 
 async def _format_image_output(image_urls: list[str], image_format: str, app_url: str) -> str:
     """根据配置格式化图片输出。
-    
+
     格式：
     - qwen_url: 直接返回原始 URL
     - local_url: 下载到本地，返回本地代理 URL
@@ -98,7 +97,8 @@ async def _format_image_output(image_urls: list[str], image_format: str, app_url
     - base64: Base64 Data URI 内嵌
     """
     from backend.services.image_proxy import download_and_save
-    import httpx, base64
+    import httpx
+    import base64
 
     if image_format == "qwen_url":
         return "\n".join(image_urls)
@@ -193,11 +193,13 @@ async def chat_completions(request: Request):
         raise HTTPException(400, {"error": {"message": "Invalid JSON body", "type": "invalid_request_error"}})
 
     model_name = req_data.get("model", "gpt-3.5-turbo")
-    qwen_model = resolve_model(model_name)
+    model_resolution = resolve_model_request(model_name)
+    qwen_model = model_resolution.model
+    chat_mode = model_resolution.chat_mode
     stream = req_data.get("stream", settings.DEFAULT_STREAM)
 
     # 思考模式
-    req_thinking = resolve_model_thinking(model_name)
+    req_thinking = model_resolution.thinking
     if "thinking" in req_data:
         req_thinking = bool(req_data["thinking"])
     elif "reasoning_effort" in req_data:
@@ -210,19 +212,21 @@ async def chat_completions(request: Request):
     # 构建 prompt
     prompt, tools = messages_to_prompt(req_data)
     history_messages = req_data.get("messages", [])
-    log.info(f"[OAI] model={qwen_model}, stream={stream}, tools={[t.get('name') for t in tools]}, thinking={req_thinking}, prompt_len={len(prompt)}")
+    log.info(
+        f"[OAI] model={qwen_model}, chat_mode={chat_mode}, stream={stream}, "
+        f"tools={[t.get('name') for t in tools]}, thinking={req_thinking}, prompt_len={len(prompt)}"
+    )
 
     # T2I 路由：z-image 模型强制生图，其他模型检测关键词
-    if model_name == "qwen-image":
-        return await _handle_t2i(request, client, history_messages, "qwen-image", stream)
+    if model_name == "qwen-image" or chat_mode == "t2i":
+        return await _handle_t2i(request, client, history_messages, model_name, stream)
 
     media_intent = _detect_media_intent(history_messages)
-    if media_intent == "t2v":
-        log.warning("[OAI] t2v intent detected but not yet validated; falling back to t2t")
-        media_intent = "t2t"
-
     if media_intent == "t2i":
         return await _handle_t2i(request, client, history_messages, model_name, stream)
+    if media_intent == "t2v" and chat_mode == "t2t":
+        chat_mode = "t2v"
+        log.info("[OAI] t2v intent detected; using chat_mode=t2v")
 
     # 多模态文件上传：检测 messages 中的 image_url 等多模态内容
     uploaded_files = None
@@ -253,6 +257,7 @@ async def chat_completions(request: Request):
         history_messages=history_messages,
         model_name=model_name,
         files=uploaded_files,
+        chat_mode=chat_mode,
     )
 
     if isinstance(result, dict):
@@ -319,11 +324,13 @@ async def _handle_t2i(request: Request, client: QwenClient, history_messages: li
 
     if stream:
         async def generate_image_stream():
-            mk = lambda delta, finish=None: json.dumps({
-                "id": completion_id, "object": "chat.completion.chunk",
-                "created": created, "model": model_name,
-                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]
-            }, ensure_ascii=False)
+            def mk(delta, finish=None):
+                return json.dumps({
+                    "id": completion_id, "object": "chat.completion.chunk",
+                    "created": created, "model": model_name,
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]
+                }, ensure_ascii=False)
+
             try:
                 answer_text, acc, chat_id = await client.image_generate_with_retry(IMAGE_MODEL_DEFAULT, image_prompt)
                 client.account_pool.release(acc)

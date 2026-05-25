@@ -9,11 +9,10 @@ import asyncio as aio
 import json
 import logging
 import uuid
-import time
 
 from backend.services.qwen_client import QwenClient
 from backend.services.prompt_builder import messages_to_prompt
-from backend.core.config import resolve_model, resolve_model_thinking
+from backend.core.config import resolve_model_request
 from backend.engine.completion import completions_raw
 
 log = logging.getLogger("qwen2api.anthropic")
@@ -115,8 +114,10 @@ async def anthropic_messages(request: Request):
         raise HTTPException(400, {"type": "invalid_request_error", "message": "Invalid JSON"})
 
     model_name = req.get("model", "claude-3-5-sonnet-latest")
-    qwen_model = resolve_model(model_name)
-    req_thinking = resolve_model_thinking(model_name)
+    model_resolution = resolve_model_request(model_name)
+    qwen_model = model_resolution.model
+    req_thinking = model_resolution.thinking
+    chat_mode = model_resolution.chat_mode
     stream = req.get("stream", False)
 
     # 转换消息格式
@@ -134,11 +135,11 @@ async def anthropic_messages(request: Request):
     prompt, tool_defs = messages_to_prompt(oai_req)
 
     completion_id = f"msg_{uuid.uuid4().hex[:24]}"
-    log.info(f"[Anthropic] model={qwen_model} stream={stream} tools={[t['name'] for t in tool_defs]}")
+    log.info(f"[Anthropic] model={qwen_model} chat_mode={chat_mode} stream={stream} tools={[t['name'] for t in tool_defs]}")
 
     # 多模态文件上传（用原始 Anthropic messages 提取）
     uploaded_files = None
-    from backend.services.file_uploader import extract_files_from_messages, upload_files_concurrent, _resolve_image_url
+    from backend.services.file_uploader import extract_files_from_messages, upload_files_concurrent
     import base64 as _b64
     raw_messages = req.get("messages", [])
     # 将 Anthropic 格式的各种 block 转为统一格式以便提取
@@ -211,6 +212,7 @@ async def anthropic_messages(request: Request):
         thinking=req_thinking,
         history_messages=messages,
         files=uploaded_files,
+        chat_mode=chat_mode,
     )
 
     # 记录使用统计
@@ -256,7 +258,7 @@ async def anthropic_messages(request: Request):
                 yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
                 if result.answer_text:
                     yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': result.answer_text}}, ensure_ascii=False)}\n\n"
-                yield f"event: content_block_stop\ndata: {{\"type\": \"content_block_stop\", \"index\": 0}}\n\n"
+                yield "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\n"
                 # tool_use blocks
                 tc_list = [b for b in result.tool_blocks if b["type"] == "tool_use"]
                 for idx, tc in enumerate(tc_list):
@@ -269,7 +271,7 @@ async def anthropic_messages(request: Request):
                 yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
                 if result.answer_text:
                     yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': result.answer_text}}, ensure_ascii=False)}\n\n"
-                yield f"event: content_block_stop\ndata: {{\"type\": \"content_block_stop\", \"index\": 0}}\n\n"
+                yield "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\n"
                 yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': result.usage.get('completion_tokens', 0)}}, ensure_ascii=False)}\n\n"
 
             yield "event: message_stop\ndata: {\"type\": \"message_stop\"}\n\n"

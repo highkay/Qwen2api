@@ -5,6 +5,7 @@ settings.py -- 设置管理端点
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from backend.core.config import settings, MODEL_MAP, save_runtime_settings, DEFAULT_MODEL_ALIASES
+from backend.core.qwen_headers import BASE_URL, qwen_api_headers
 from . import _require_admin
 
 log = logging.getLogger("qwen2api.admin")
@@ -19,7 +20,15 @@ async def get_settings(_=Depends(_require_admin)):
         "admin_key": settings.ADMIN_KEY,
         "app_url": getattr(settings, "APP_URL", ""),
         "max_inflight_per_account": settings.MAX_INFLIGHT_PER_ACCOUNT,
+        "max_waiting_requests": getattr(settings, "MAX_WAITING_REQUESTS", 100),
+        "account_acquire_timeout": getattr(settings, "ACCOUNT_ACQUIRE_TIMEOUT", 60),
         "engine_mode": settings.ENGINE_MODE,
+        "model_catalog_ttl_seconds": getattr(settings, "MODEL_CATALOG_TTL_SECONDS", 1800),
+        "enable_special_chat_modes": getattr(settings, "ENABLE_SPECIAL_CHAT_MODES", True),
+        "qwen_chrome_version": getattr(settings, "QWEN_CHROME_VERSION", "124"),
+        "qwen_web_version": getattr(settings, "QWEN_WEB_VERSION", "0.2.46"),
+        "qwen_bx_v": getattr(settings, "QWEN_BX_V", ""),
+        "qwen_impersonate": getattr(settings, "QWEN_IMPERSONATE", "chrome124"),
         "model_aliases": merged_aliases,
         "moemail_domain": settings.MOEMAIL_DOMAIN,
         "moemail_key": settings.MOEMAIL_KEY,
@@ -64,7 +73,15 @@ async def get_default_settings(_=Depends(_require_admin)):
         "admin_key": "123456",
         "app_url": "",
         "max_inflight_per_account": 1,
+        "max_waiting_requests": 100,
+        "account_acquire_timeout": 60,
         "engine_mode": "hybrid",
+        "model_catalog_ttl_seconds": 1800,
+        "enable_special_chat_modes": True,
+        "qwen_chrome_version": "124",
+        "qwen_web_version": "0.2.46",
+        "qwen_bx_v": "",
+        "qwen_impersonate": "chrome124",
         "model_aliases": dict(DEFAULT_MODEL_ALIASES),
         "moemail_domain": "",
         "moemail_key": "",
@@ -110,8 +127,24 @@ async def update_settings(request: Request, _=Depends(_require_admin)):
 
     if "max_inflight_per_account" in body:
         settings.MAX_INFLIGHT_PER_ACCOUNT = int(body["max_inflight_per_account"])
+    if "max_waiting_requests" in body:
+        settings.MAX_WAITING_REQUESTS = max(0, int(body["max_waiting_requests"]))
+    if "account_acquire_timeout" in body:
+        settings.ACCOUNT_ACQUIRE_TIMEOUT = max(1, int(body["account_acquire_timeout"]))
     if "engine_mode" in body:
         settings.ENGINE_MODE = body["engine_mode"]
+    if "model_catalog_ttl_seconds" in body:
+        settings.MODEL_CATALOG_TTL_SECONDS = max(60, int(body["model_catalog_ttl_seconds"]))
+    if "enable_special_chat_modes" in body:
+        settings.ENABLE_SPECIAL_CHAT_MODES = bool(body["enable_special_chat_modes"])
+    if "qwen_chrome_version" in body:
+        settings.QWEN_CHROME_VERSION = str(body["qwen_chrome_version"]).strip() or "124"
+    if "qwen_web_version" in body:
+        settings.QWEN_WEB_VERSION = str(body["qwen_web_version"]).strip() or "0.2.46"
+    if "qwen_bx_v" in body:
+        settings.QWEN_BX_V = str(body["qwen_bx_v"]).strip()
+    if "qwen_impersonate" in body:
+        settings.QWEN_IMPERSONATE = str(body["qwen_impersonate"]).strip()
     if "admin_key" in body:
         new_key = str(body["admin_key"]).strip()
         if new_key:
@@ -211,7 +244,7 @@ async def test_proxy(_=Depends(_require_admin)):
         parsed = urlparse(proxy_url)
         proxy_url = urlunparse(parsed._replace(netloc=f"{username}:{password}@{parsed.hostname}:{parsed.port or ''}"))
 
-    target_url = "https://chat.qwen.ai/api/v1/auths/"
+    target_url = f"{BASE_URL}/api/v1/auths/"
     t0 = time.time()
 
     try:
@@ -220,10 +253,7 @@ async def test_proxy(_=Depends(_require_admin)):
             timeout=15,
             verify=False,
         ) as client:
-            resp = await client.get(target_url, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "application/json",
-            })
+            resp = await client.get(target_url, headers=qwen_api_headers(accept="application/json"))
         latency_ms = int((time.time() - t0) * 1000)
 
         if resp.status_code in (200, 401, 403):

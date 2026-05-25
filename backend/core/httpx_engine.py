@@ -7,27 +7,9 @@ import asyncio
 import json
 import logging
 
+from backend.core.qwen_headers import BASE_URL, qwen_api_headers, qwen_impersonate
+
 log = logging.getLogger("qwen2api.httpx_engine")
-
-BASE_URL = "https://chat.qwen.ai"
-
-_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "Referer": "https://chat.qwen.ai/",
-    "Origin": "https://chat.qwen.ai",
-    "source": "web",
-    "version": "0.2.46",
-    "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Windows"',
-    "sec-fetch-dest": "empty",
-    "sec-fetch-mode": "cors",
-    "sec-fetch-site": "same-origin",
-}
-
-_IMPERSONATE = "chrome124"
 
 
 class HttpxEngine:
@@ -52,15 +34,15 @@ class HttpxEngine:
         log.info("[HttpxEngine] 已停止")
 
     def _auth_headers(self, token: str) -> dict:
-        return {**_HEADERS, "Authorization": f"Bearer {token}"}
+        return qwen_api_headers(token, extra={"source": "web"})
 
     async def api_call(self, method: str, path: str, token: str, body: dict = None) -> dict:
         from curl_cffi.requests import AsyncSession
         url = self.base_url + path
-        headers = {**self._auth_headers(token), "Content-Type": "application/json"}
+        headers = qwen_api_headers(token, content_type="application/json", extra={"source": "web"})
         data = json.dumps(body, ensure_ascii=False).encode() if body else None
         try:
-            async with AsyncSession(impersonate=_IMPERSONATE, timeout=30) as client:
+            async with AsyncSession(impersonate=qwen_impersonate(), timeout=30) as client:
                 resp = await client.request(method, url, headers=headers, data=data)
             return {"status": resp.status_code, "body": resp.text}
         except Exception as e:
@@ -79,20 +61,11 @@ class HttpxEngine:
         """
         from curl_cffi.requests import AsyncSession
         url = self.base_url + f"/api/v2/chat/completions?chat_id={chat_id}"
-        headers = {
-            **self._auth_headers(token),
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
-            "Accept-Encoding": "identity",  # 禁用压缩，确保流式即时到达
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Origin": "https://chat.qwen.ai",
-            "Referer": "https://chat.qwen.ai/",
-            "X-Accel-Buffering": "no",  # 告知上游 nginx 不要缓冲
-        }
+        headers = qwen_api_headers(token, content_type="application/json", stream=True, extra={"source": "web"})
         body_bytes = json.dumps(payload, ensure_ascii=False).encode()
 
         try:
-            session = AsyncSession(impersonate=_IMPERSONATE, timeout=120)
+            session = AsyncSession(impersonate=qwen_impersonate(), timeout=120)
             try:
                 response = await session.post(
                     url, headers=headers, data=body_bytes, stream=True

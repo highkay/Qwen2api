@@ -116,6 +116,24 @@
             fields: [
               { key: 'engine_mode', label: '驱动引擎', type: 'select', options: [{value:'httpx',label:'httpx'},{value:'browser',label:'browser'},{value:'hybrid',label:'hybrid'}], desc: 'httpx 快速直连 / browser 浏览器指纹 / hybrid 混合。' },
               { key: 'max_inflight_per_account', label: '单账号并发', type: 'number', desc: '每个账号同时处理的最大请求数，1=最安全。' },
+              { key: 'max_waiting_requests', label: '本地排队上限', type: 'number', desc: '账号池已满时允许等待的最大请求数，超过后立即返回 429。0 表示不允许排队。' },
+              { key: 'account_acquire_timeout', label: '取号等待超时（秒）', type: 'number', desc: '请求等待可用账号的最长时间，超时后返回 503。' },
+            ]
+          },
+          {
+            title: '模型与模式', section: 'model',
+            fields: [
+              { key: 'model_catalog_ttl_seconds', label: '模型目录缓存（秒）', type: 'number', desc: '从 Qwen 动态刷新模型列表后的缓存时间，失败时回退到内置模型。' },
+              { key: 'enable_special_chat_modes', label: '启用特殊模式后缀', type: 'bool', desc: '允许 -deep-research、-webdev、-slides、-video 等模型后缀映射到 Qwen 特殊 chat_mode。' },
+            ]
+          },
+          {
+            title: 'Qwen 请求指纹', section: 'qwen',
+            fields: [
+              { key: 'qwen_impersonate', label: 'curl 指纹', type: 'text', desc: 'curl_cffi impersonate 配置，例如 chrome124。需与当前依赖支持的浏览器指纹匹配。' },
+              { key: 'qwen_chrome_version', label: 'Chrome 主版本', type: 'text', desc: '发送给 Qwen 的浏览器 User-Agent 主版本。' },
+              { key: 'qwen_web_version', label: 'Qwen Web 版本', type: 'text', desc: '发送给 Qwen 的 x-web-version 请求头。上游版本变更时可在此更新。' },
+              { key: 'qwen_bx_v', label: 'Qwen bx-v', type: 'text', desc: '可选 x-bx-v 请求头。留空则不发送。' },
             ]
           },
           {

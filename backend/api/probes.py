@@ -2,9 +2,9 @@
 probes.py -- 健康检查与模型列表
 """
 
-import time
 from fastapi import APIRouter, Request
-from backend.core.config import MODEL_MAP, VERSION, BUILTIN_MODELS, DEFAULT_MODEL_ALIASES, get_all_available_models
+from backend.core.config import VERSION
+from backend.services.model_catalog import fallback_openai_model_entries, model_catalog
 
 router = APIRouter()
 
@@ -17,15 +17,11 @@ async def health():
 
 @router.get("/v1/models")
 @router.get("/models")
-async def list_models():
-    """返回兼容 OpenAI /v1/models 格式的模型列表。包含内置模型 + 默认别名 + 用户自定义映射。"""
-    all_names = get_all_available_models()
-    data = []
-    for name in all_names:
-        data.append({
-            "id": name,
-            "object": "model",
-            "created": 1700000000,
-            "owned_by": "qwen2api",
-        })
+async def list_models(request: Request):
+    """返回兼容 OpenAI /v1/models 格式的模型列表。优先使用 Qwen 动态目录。"""
+    qwen_client = getattr(request.app.state, "qwen_client", None)
+    if qwen_client is not None:
+        data = await model_catalog.get_openai_models(qwen_client)
+    else:
+        data = fallback_openai_model_entries()
     return {"object": "list", "data": data}

@@ -3,11 +3,8 @@ image_proxy.py -- 图片代理服务（磁盘持久化版）
 仿 grok2api 的 media_cache 机制：图片存到 data/files/images/，支持容量管理。
 """
 
-import hashlib
 import logging
-import os
 import re
-import time
 import uuid
 from pathlib import Path
 from typing import Optional

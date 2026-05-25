@@ -16,6 +16,8 @@ import logging
 import random
 from typing import Optional
 
+from backend.core.qwen_headers import BASE_URL, qwen_user_agent
+
 log = logging.getLogger("qwen2api.browser_register")
 
 
@@ -93,11 +95,7 @@ async def browser_signup(
             )
             ctx_kwargs = dict(
                 viewport={"width": 1280, "height": 800},
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/131.0.0.0 Safari/537.36"
-                ),
+                user_agent=qwen_user_agent(),
                 locale="zh-CN",
             )
             if _proxy:
@@ -114,13 +112,13 @@ async def browser_signup(
             log.info(f"[Register] [{email}] 打开注册页面...")
             try:
                 await page.goto(
-                    "https://chat.qwen.ai/auth?mode=register",
+                    f"{BASE_URL}/auth?mode=register",
                     wait_until="networkidle",
                     timeout=30000,
                 )
             except Exception:
                 await page.goto(
-                    "https://chat.qwen.ai/auth?mode=register",
+                    f"{BASE_URL}/auth?mode=register",
                     wait_until="domcontentloaded",
                     timeout=30000,
                 )

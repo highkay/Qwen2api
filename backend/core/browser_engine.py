@@ -4,7 +4,6 @@ browser_engine.py — 浏览器引擎桩（Stub）
 如需真正的 Camoufox 无头浏览器，请安装 camoufox 并替换此实现。
 """
 
-import asyncio
 import logging
 
 log = logging.getLogger("qwen2api.browser_engine")

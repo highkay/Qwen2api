@@ -15,7 +15,6 @@ import json
 import re
 import uuid
 import logging
-from typing import Any
 
 log = logging.getLogger("qwen2api.tool_parser")
 

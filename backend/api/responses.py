@@ -13,7 +13,7 @@ import time
 
 from backend.services.qwen_client import QwenClient
 from backend.services.prompt_builder import messages_to_prompt
-from backend.core.config import resolve_model, resolve_model_thinking
+from backend.core.config import resolve_model_request
 from backend.engine.completion import completions_raw
 
 log = logging.getLogger("qwen2api.responses")
@@ -162,8 +162,10 @@ async def openai_responses(request: Request):
         raise HTTPException(400, {"error": {"message": "Invalid JSON", "type": "invalid_request_error"}})
 
     model_name = req.get("model", "gpt-4o")
-    qwen_model = resolve_model(model_name)
-    req_thinking = resolve_model_thinking(model_name)
+    model_resolution = resolve_model_request(model_name)
+    qwen_model = model_resolution.model
+    req_thinking = model_resolution.thinking
+    chat_mode = model_resolution.chat_mode
     stream = req.get("stream", False)
 
     # 构建 messages
@@ -181,7 +183,7 @@ async def openai_responses(request: Request):
 
     response_id = f"resp_{uuid.uuid4().hex[:24]}"
     created = int(time.time())
-    log.info(f"[Responses] model={qwen_model} stream={stream} tools={[t['name'] for t in tool_defs]}")
+    log.info(f"[Responses] model={qwen_model} chat_mode={chat_mode} stream={stream} tools={[t['name'] for t in tool_defs]}")
 
     # 多模态文件上传（从原始 input 提取）
     uploaded_files = None
@@ -216,7 +218,7 @@ async def openai_responses(request: Request):
                         if isinstance(file_data_field, dict) and file_data_field.get("data"):
                             mime = file_data_field.get("mime_type", "application/octet-stream")
                             fb = _b64.b64decode(file_data_field["data"])
-                            fn = file_data_field.get("name", f"file.bin")
+                            fn = file_data_field.get("name", "file.bin")
                             _direct_files.append((fb, fn, mime))
                 if blocks:
                     _oai_for_extract.append({"role": role, "content": blocks})
@@ -244,6 +246,7 @@ async def openai_responses(request: Request):
         thinking=req_thinking,
         history_messages=messages,
         files=uploaded_files,
+        chat_mode=chat_mode,
     )
 
     # 记录使用统计

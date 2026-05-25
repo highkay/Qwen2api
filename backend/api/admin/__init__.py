@@ -3,7 +3,7 @@ admin/ -- 管理后台 API（拆分为多个子模块）
 路由聚合 + 共享鉴权依赖。
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from backend.core.config import settings as app_settings
 
 router = APIRouter()
@@ -24,11 +24,11 @@ def _require_admin(request: Request):
 
 
 # 挂载子模块路由
-from .accounts import router as accounts_router
-from .keys import router as keys_router
-from .settings import router as settings_router
-from .stats import router as stats_router
-from .cache import router as cache_router
+from .accounts import router as accounts_router  # noqa: E402
+from .keys import router as keys_router  # noqa: E402
+from .settings import router as settings_router  # noqa: E402
+from .stats import router as stats_router  # noqa: E402
+from .cache import router as cache_router  # noqa: E402
 
 router.include_router(accounts_router)
 router.include_router(keys_router)

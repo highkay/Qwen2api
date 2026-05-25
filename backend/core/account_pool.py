@@ -6,10 +6,7 @@ Min-Heap 调度 + 6 态生命周期 + 断路器 + 自适应限流 + 冷启动升
 
 import asyncio
 import heapq
-import hashlib
-import json
 import logging
-import random
 import time
 from collections import deque
 from typing import Optional, Any
@@ -33,6 +30,10 @@ BANNED_KEYWORDS = (
 
 TRANSIENT_KEYWORDS = ("timeout", "connection reset", "connection refused",
                       "eof", "broken pipe", "temporary failure", "dns")
+
+
+class LocalBackpressureError(Exception):
+    """Raised when local wait queue is full before an account can be acquired."""
 
 
 class Account:
@@ -122,14 +123,19 @@ class Account:
 
     @property
     def effective_max_inflight(self) -> int:
+        try:
+            from backend.core.config import settings as _settings
+            configured = max(1, int(getattr(_settings, "MAX_INFLIGHT_PER_ACCOUNT", 1)))
+        except Exception:
+            configured = 1
         now = time.time()
         if now < self.warmup_until:
             elapsed = now - self.created_at
             if elapsed < 1800:
                 return 1
             elif elapsed < 7200:
-                return 2
-        return 3  # 全速
+                return min(configured, 2)
+        return configured
 
     # ── Score 计算 ────────────────────────────
     def compute_score(self) -> float:
@@ -233,6 +239,7 @@ class AccountPool:
         self._sticky_map: dict[str, tuple[str, str, float]] = {}
         # SSE 事件队列
         self._sse_events: asyncio.Queue = asyncio.Queue(maxsize=1000)
+        self._waiting_count = 0
         # 补号状态
         self._replenish_retry_count = 0
         self._replenish_failing_since: float = 0
@@ -273,6 +280,31 @@ class AccountPool:
         log.info("[AccountPool] 后台任务已启动")
 
     # ── 调度核心 ─────────────────────────────
+    def _settings_value(self, name: str, default: Any) -> Any:
+        if self._settings is not None and hasattr(self._settings, name):
+            return getattr(self._settings, name)
+        try:
+            from backend.core.config import settings as _settings
+            return getattr(_settings, name, default)
+        except Exception:
+            return default
+
+    def _max_waiting_requests(self) -> int:
+        return max(0, int(self._settings_value("MAX_WAITING_REQUESTS", 100)))
+
+    def _effective_max_inflight(self, acc: Account) -> int:
+        configured = max(1, int(self._settings_value("MAX_INFLIGHT_PER_ACCOUNT", 1)))
+        if acc.status == STATUS_HALF_OPEN:
+            return 1
+        now = time.time()
+        if now < acc.warmup_until:
+            elapsed = now - acc.created_at
+            if elapsed < 1800:
+                return 1
+            if elapsed < 7200:
+                return min(configured, 2)
+        return configured
+
     def _is_available(self, acc: Account, exclude: set[str] | None = None) -> bool:
         if exclude and acc.email in exclude:
             return False
@@ -282,7 +314,7 @@ class AccountPool:
             return False
         if acc.status == STATUS_HALF_OPEN and acc.inflight > 0:
             return False  # HALF_OPEN 只允许 1 个探针
-        if acc.inflight >= acc.effective_max_inflight:
+        if acc.inflight >= self._effective_max_inflight(acc):
             return False
         if acc.rpm_1min >= acc.effective_max_rpm:
             return False
@@ -302,7 +334,8 @@ class AccountPool:
         if not token:
             return True
         try:
-            import base64, json as _json
+            import base64
+            import json as _json
             parts = token.split(".")
             if len(parts) < 2:
                 return True  # 非 JWT 格式，视为无效
@@ -352,17 +385,34 @@ class AccountPool:
                            exclude: set[str] | None = None,
                            sticky_email: str | None = None) -> Optional[Account]:
         deadline = time.time() + timeout
-        while time.time() < deadline:
-            acc = await self.acquire(exclude, sticky_email)
-            if acc:
-                return acc
-            try:
-                remaining = deadline - time.time()
-                await asyncio.wait_for(self._event.wait(), timeout=min(2.0, remaining))
-            except asyncio.TimeoutError:
-                pass
-            self._event.clear()
-        return None
+        acc = await self.acquire(exclude, sticky_email)
+        if acc:
+            return acc
+
+        async with self._lock:
+            max_waiting = self._max_waiting_requests()
+            if max_waiting <= 0:
+                raise LocalBackpressureError("account acquire queue disabled")
+            if self._waiting_count >= max_waiting:
+                raise LocalBackpressureError(
+                    f"account acquire queue full ({self._waiting_count}/{max_waiting})"
+                )
+            self._waiting_count += 1
+        try:
+            while time.time() < deadline:
+                acc = await self.acquire(exclude, sticky_email)
+                if acc:
+                    return acc
+                try:
+                    remaining = deadline - time.time()
+                    await asyncio.wait_for(self._event.wait(), timeout=min(2.0, remaining))
+                except asyncio.TimeoutError:
+                    pass
+                self._event.clear()
+            return None
+        finally:
+            async with self._lock:
+                self._waiting_count = max(0, self._waiting_count - 1)
 
     def release(self, acc: Account, tokens_used: int = 0):
         """释放账号并更新统计窗口。"""
@@ -722,19 +772,20 @@ class AccountPool:
     # ── 背压信号 ─────────────────────────────
     def pressure(self) -> float:
         """返回 0.0 ~ 1.0 的系统压力值。"""
-        total = len(self._accounts)
-        if total == 0:
+        capacity = sum(
+            self._effective_max_inflight(a)
+            for a in self._accounts
+            if a.status in (STATUS_VALID, STATUS_SOFT_ERROR, STATUS_HALF_OPEN)
+            and not a.activation_pending
+        )
+        if capacity <= 0:
             return 1.0
-        valid = sum(1 for a in self._accounts if a.status in (STATUS_VALID, STATUS_SOFT_ERROR))
-        if valid == 0:
-            return 1.0
-        busy = sum(1 for a in self._accounts
-                   if a.status in (STATUS_VALID, STATUS_SOFT_ERROR) and a.inflight > 0)
-        return busy / valid
+        busy = sum(a.inflight for a in self._accounts
+                   if a.status in (STATUS_VALID, STATUS_SOFT_ERROR, STATUS_HALF_OPEN))
+        return min(1.0, (busy + self._waiting_count) / capacity)
 
     # ── 状态摘要 ─────────────────────────────
     def status(self) -> dict:
-        now = time.time()
         total = len(self._accounts)
         valid = sum(1 for a in self._accounts if a.status == STATUS_VALID)
         soft_error = sum(1 for a in self._accounts if a.status == STATUS_SOFT_ERROR)
@@ -745,11 +796,21 @@ class AccountPool:
         in_use = sum(1 for a in self._accounts if a.inflight > 0)
         waiting = sum(a.inflight for a in self._accounts)
         activation_pending = sum(1 for a in self._accounts if a.activation_pending)
+        capacity = sum(
+            self._effective_max_inflight(a)
+            for a in self._accounts
+            if a.status in (STATUS_VALID, STATUS_SOFT_ERROR, STATUS_HALF_OPEN)
+            and not a.activation_pending
+        )
         return {
             "total": total, "valid": valid, "soft_error": soft_error,
             "rate_limited": rate_limited, "circuit_open": circuit_open,
             "banned": banned, "pending_refresh": pending,
             "in_use": in_use, "waiting": waiting,
+            "queued": self._waiting_count,
+            "max_queue": self._max_waiting_requests(),
+            "capacity": capacity,
+            "max_inflight_per_account": int(self._settings_value("MAX_INFLIGHT_PER_ACCOUNT", 1)),
             "activation_pending": activation_pending,
             "pressure": round(self.pressure(), 2),
             # 兼容 v1
@@ -763,6 +824,7 @@ class AccountPool:
                 "email": acc.email,
                 "status": acc.status,
                 "inflight": acc.inflight,
+                "max_inflight": self._effective_max_inflight(acc),
                 "rpm_1min": acc.rpm_1min,
                 "tpm_1min": acc.tpm_1min,
                 "learned_max_rpm": acc.learned_max_rpm,

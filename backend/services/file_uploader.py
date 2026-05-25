@@ -12,7 +12,6 @@ file_uploader.py -- Qwen 多模态文件上传服务
 
 import asyncio
 import base64
-import hashlib
 import logging
 import time
 import uuid
@@ -21,9 +20,9 @@ from dataclasses import dataclass
 
 import httpx
 
-log = logging.getLogger("qwen2api.file_uploader")
+from backend.core.qwen_headers import BASE_URL, qwen_api_headers
 
-BASE_URL = "https://chat.qwen.ai"
+log = logging.getLogger("qwen2api.file_uploader")
 
 # 支持的 MIME 类型分类
 _IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp", "image/tiff"}
@@ -97,7 +96,7 @@ class UploadedFile:
 
 def _get_file_class(mime: str) -> str:
     """根据 MIME 类型返回 Qwen 的 file_class 分类
-    
+
     关键：图片类型返回 "vision"（不是 "image"），这告诉 Qwen 启用视觉理解
     """
     if mime in _IMAGE_MIMES:
@@ -134,14 +133,7 @@ def _guess_extension(mime: str) -> str:
 
 async def _get_sts_token(token: str, filename: str, filesize: int, filetype: str) -> dict:
     """Step 1: 获取 STS 临时凭证"""
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json",
-        "Origin": "https://chat.qwen.ai",
-        "Referer": "https://chat.qwen.ai/",
-    }
+    headers = qwen_api_headers(token, content_type="application/json", accept="application/json")
     body = {"filename": filename, "filesize": filesize, "filetype": filetype}
 
     for attempt in range(3):
@@ -155,7 +147,7 @@ async def _get_sts_token(token: str, filename: str, filesize: int, filetype: str
             if resp.status_code == 401 or resp.status_code == 403:
                 raise Exception(f"unauthorized: getstsToken HTTP {resp.status_code}")
             if resp.status_code == 429:
-                raise Exception(f"429: getstsToken rate limited")
+                raise Exception("429: getstsToken rate limited")
             if resp.status_code != 200:
                 if attempt < 2:
                     await asyncio.sleep(0.5 * (attempt + 1))
@@ -174,7 +166,7 @@ async def _get_sts_token(token: str, filename: str, filesize: int, filetype: str
 
 async def _upload_to_oss(sts_data: dict, file_bytes: bytes, mime_type: str) -> None:
     """Step 2: PUT 文件到 OSS（使用 oss2 SDK + STS Token 认证）
-    
+
     使用阿里云 oss2 SDK 处理 V4 签名，确保认证正确。
     """
     import oss2
@@ -217,13 +209,7 @@ async def _upload_to_oss(sts_data: dict, file_bytes: bytes, mime_type: str) -> N
 
 async def _trigger_parse(token: str, file_id: str) -> None:
     """Step 3: 通知 Qwen 解析文件"""
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Origin": "https://chat.qwen.ai",
-        "Referer": "https://chat.qwen.ai/",
-    }
+    headers = qwen_api_headers(token, content_type="application/json")
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
             f"{BASE_URL}/api/v2/files/parse",
@@ -236,13 +222,7 @@ async def _trigger_parse(token: str, file_id: str) -> None:
 
 async def _wait_parse(token: str, file_id: str, timeout_s: float = 60) -> bool:
     """Step 4: 轮询解析状态，返回是否成功"""
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Origin": "https://chat.qwen.ai",
-        "Referer": "https://chat.qwen.ai/",
-    }
+    headers = qwen_api_headers(token, content_type="application/json")
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         try:

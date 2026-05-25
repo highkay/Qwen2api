@@ -1,9 +1,9 @@
 import os
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from pydantic_settings import BaseSettings
-from typing import Dict, Set
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     ADMIN_KEY: str = os.getenv("ADMIN_KEY", "123456")  # 默认管理密钥
     REGISTER_SECRET: str = os.getenv("REGISTER_SECRET", "")
     APP_URL: str = os.getenv("APP_URL", "")  # 应用对外 URL，用于图片代理等
-    
+
     # MoeMail 自建配置
     MOEMAIL_DOMAIN: str = os.getenv("MOEMAIL_DOMAIN", "")
     MOEMAIL_KEY: str = os.getenv("MOEMAIL_KEY", "")
@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     # 浏览器引擎配置
     BROWSER_POOL_SIZE: int = int(os.getenv("BROWSER_POOL_SIZE", 2))
     MAX_INFLIGHT_PER_ACCOUNT: int = int(os.getenv("MAX_INFLIGHT", 1))
+    MAX_WAITING_REQUESTS: int = int(os.getenv("MAX_WAITING_REQUESTS", 100))
+    ACCOUNT_ACQUIRE_TIMEOUT: int = int(os.getenv("ACCOUNT_ACQUIRE_TIMEOUT", 60))
     STREAM_KEEPALIVE_INTERVAL: int = int(os.getenv("STREAM_KEEPALIVE_INTERVAL", 5))
     # 流式输出打字机效果：每批输出的字符数和间隔（毫秒）
     # 设为 0 则直接透传上游原始速度（无打字机效果）
@@ -108,6 +110,14 @@ class Settings(BaseSettings):
     # 图片缓存上限（MB），0=不限制
     IMAGE_CACHE_MAX_MB: int = int(os.getenv("IMAGE_CACHE_MAX_MB", 100))
 
+    # Qwen 网页模型目录与请求头参数
+    MODEL_CATALOG_TTL_SECONDS: int = int(os.getenv("MODEL_CATALOG_TTL_SECONDS", 1800))
+    ENABLE_SPECIAL_CHAT_MODES: bool = os.getenv("ENABLE_SPECIAL_CHAT_MODES", "true").lower() in ("1", "true", "yes", "on")
+    QWEN_CHROME_VERSION: str = os.getenv("QWEN_CHROME_VERSION", "124")
+    QWEN_WEB_VERSION: str = os.getenv("QWEN_WEB_VERSION", "0.2.46")
+    QWEN_BX_V: str = os.getenv("QWEN_BX_V", "")
+    QWEN_IMPERSONATE: str = os.getenv("QWEN_IMPERSONATE", f"chrome{os.getenv('QWEN_CHROME_VERSION', '124')}")
+
 
     # 数据文件路径
     ACCOUNTS_FILE: str = os.getenv("ACCOUNTS_FILE", str(DATA_DIR / "accounts.json"))
@@ -148,8 +158,11 @@ _PERSIST_KEYS = [
     "ADMIN_KEY", "APP_URL",
     "AUTO_REPLENISH", "REPLENISH_TARGET", "REPLENISH_CONCURRENCY", "REPLENISH_PROVIDER",
     "AUTO_REPLENISH_ON_EXHAUST", "REPLENISH_EXHAUST_COUNT", "REPLENISH_EXHAUST_CONCURRENCY",
-    "MAX_INFLIGHT_PER_ACCOUNT", "MAX_RPM_PER_ACCOUNT", "MAX_TPM_PER_ACCOUNT",
+    "MAX_INFLIGHT_PER_ACCOUNT", "MAX_WAITING_REQUESTS", "ACCOUNT_ACQUIRE_TIMEOUT",
+    "MAX_RPM_PER_ACCOUNT", "MAX_TPM_PER_ACCOUNT",
     "CACHE_TTL_SECONDS", "RACING_ENABLED", "ENGINE_MODE", "DEFAULT_STREAM",
+    "MODEL_CATALOG_TTL_SECONDS", "ENABLE_SPECIAL_CHAT_MODES",
+    "QWEN_CHROME_VERSION", "QWEN_WEB_VERSION", "QWEN_BX_V", "QWEN_IMPERSONATE",
     "MOEMAIL_DOMAIN", "MOEMAIL_KEY", "TEMPMAIL_DOMAIN", "TEMPMAIL_KEY", "TEMPMAIL_SITE_PASSWORD",
     "SMARTMAIL_KEY", "VIPMAIL_KEY",
     "PROXY_ENABLED", "PROXY_URL", "PROXY_USERNAME", "PROXY_PASSWORD",
@@ -218,6 +231,28 @@ DEFAULT_MODEL = "qwen3.6-plus"
 NOTHINKING_SUFFIX = "-nothinking"
 THINKING_SUFFIX = "-thinking"
 
+MODEL_MODE_SUFFIXES = [
+    (NOTHINKING_SUFFIX, "t2t", False),
+    (THINKING_SUFFIX, "t2t", True),
+    ("-deep-research", "deep_research", None),
+    ("-web-dev", "web_dev", None),
+    ("-webdev", "web_dev", None),
+    ("-slides", "slides", None),
+    ("-video", "t2v", None),
+    ("-t2v", "t2v", None),
+    ("-image", "t2i", None),
+    ("-t2i", "t2i", None),
+]
+
+
+@dataclass(frozen=True)
+class ModelResolution:
+    requested: str
+    model: str
+    chat_mode: str
+    thinking: bool | None
+    suffix: str | None = None
+
 # ── 默认别名映射（已禁用，不再做模型映射）──────────────
 DEFAULT_MODEL_ALIASES: dict[str, str] = {}
 
@@ -231,67 +266,73 @@ _load_runtime_settings()
 IMAGE_MODEL_DEFAULT = "qwen3.6-plus"
 
 
-def resolve_model(name: str) -> str:
-    """解析模型名，返回 Qwen 真实模型名。
-    
-    -nothinking / -thinking 后缀会被剥离，真实模型名传给 Qwen。
-    思考模式由 resolve_model_thinking() 单独判断。
-    """
-    # 1. 用户自定义映射（最高优先级）
-    if name in MODEL_MAP:
-        resolved = MODEL_MAP[name]
-        if resolved.endswith(NOTHINKING_SUFFIX):
-            return resolved[:-len(NOTHINKING_SUFFIX)]
-        if resolved.endswith(THINKING_SUFFIX):
-            return resolved[:-len(THINKING_SUFFIX)]
-        return resolved
-    # 2. 剥离后缀
-    base_name = name
-    if name.endswith(NOTHINKING_SUFFIX):
-        base_name = name[:-len(NOTHINKING_SUFFIX)]
-    elif name.endswith(THINKING_SUFFIX):
-        base_name = name[:-len(THINKING_SUFFIX)]
-    # 3. 如果本身就是内置真实模型名
-    real_models = {"qwen3.6-plus", "qwen3.6-max-preview", "qwen3.6-27b"}
-    if base_name in real_models:
-        return base_name
-    # Qwen 3.7 系列：无论传入带不带 -thinking 后缀，都映射到 invite-beta ID
+def resolve_model_request(name: str) -> ModelResolution:
+    """解析客户端模型名，得到 Qwen 模型、chat_mode 与 thinking 覆盖。"""
+    requested = name or DEFAULT_MODEL
+    mapped = MODEL_MAP.get(requested, requested)
+    base_name = mapped
+    chat_mode = "t2t"
+    thinking: bool | None = None
+    suffix: str | None = None
+
+    if settings.ENABLE_SPECIAL_CHAT_MODES:
+        for mode_suffix, mode, forced_thinking in MODEL_MODE_SUFFIXES:
+            if mapped.endswith(mode_suffix):
+                base_name = mapped[:-len(mode_suffix)]
+                chat_mode = mode
+                thinking = forced_thinking
+                suffix = mode_suffix
+                break
+    elif mapped.endswith(NOTHINKING_SUFFIX):
+        base_name = mapped[:-len(NOTHINKING_SUFFIX)]
+        thinking = False
+        suffix = NOTHINKING_SUFFIX
+    elif mapped.endswith(THINKING_SUFFIX):
+        base_name = mapped[:-len(THINKING_SUFFIX)]
+        thinking = True
+        suffix = THINKING_SUFFIX
+
+    if mapped == "qwen-image":
+        base_name = mapped
+        chat_mode = "t2i"
+
     qwen37_map = {
         "qwen3.7-max-preview-thinking": "qwen-latest-series-invite-beta-v24",
         "qwen3.7-max-preview": "qwen-latest-series-invite-beta-v24",
         "qwen3.7-plus-preview-thinking": "qwen-latest-series-invite-beta-v16",
         "qwen3.7-plus-preview": "qwen-latest-series-invite-beta-v16",
     }
-    if base_name in qwen37_map:
-        return qwen37_map[base_name]
-    if name in qwen37_map:
-        return qwen37_map[name]
-    # 4. 不认识的模型名直接透传（不做映射）
-    return base_name
+    model = qwen37_map.get(base_name, qwen37_map.get(mapped, base_name))
+    if "qwen3.7" in base_name or "qwen3.7" in mapped:
+        thinking = True
+
+    return ModelResolution(
+        requested=requested,
+        model=model,
+        chat_mode=chat_mode,
+        thinking=thinking,
+        suffix=suffix,
+    )
+
+
+def resolve_model(name: str) -> str:
+    """解析模型名，返回 Qwen 真实模型名。
+
+    -nothinking / -thinking 后缀会被剥离，真实模型名传给 Qwen。
+    思考模式由 resolve_model_thinking() 单独判断。
+    """
+    return resolve_model_request(name).model
 
 
 def resolve_model_thinking(name: str) -> bool | None:
     """根据模型名判断思考模式。
-    
+
     -nothinking 后缀 = False（快速模式，关闭思考）
     -thinking 后缀 = True（强制思考模式）
     无后缀 = None（自动模式，由 Qwen 决定）
     Qwen 3.7 系列 = 始终 True（仅支持思考模式）
     """
-    if name in MODEL_MAP:
-        resolved = MODEL_MAP[name]
-        if resolved.endswith(NOTHINKING_SUFFIX):
-            return False
-        if resolved.endswith(THINKING_SUFFIX):
-            return True
-    if name.endswith(NOTHINKING_SUFFIX):
-        return False
-    if name.endswith(THINKING_SUFFIX):
-        return True
-    # Qwen 3.7 系列仅支持思考模式
-    if "qwen3.7" in name:
-        return True
-    return None  # 自动模式
+    return resolve_model_request(name).thinking
 
 
 def get_all_available_models() -> list[str]:

@@ -2,7 +2,7 @@
 cache.py -- 缓存管理端点
 """
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from backend.services.image_proxy import get_cache_stats, list_images, delete_image, clear_all_images
 from . import _require_admin
 

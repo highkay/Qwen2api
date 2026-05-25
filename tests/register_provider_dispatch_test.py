@@ -9,7 +9,7 @@ fake_curl = types.ModuleType("curl_cffi")
 fake_curl.requests = types.SimpleNamespace()
 sys.modules.setdefault("curl_cffi", fake_curl)
 
-from backend.services import mail_service, register
+from backend.services import mail_service, register  # noqa: E402
 
 
 class RegisterProviderDispatchTest(unittest.TestCase):

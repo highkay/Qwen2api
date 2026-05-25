@@ -3,12 +3,11 @@ auth_resolver.py — 账号自动恢复
 当账号鉴权失败或待激活时，尝试自动重新登录获取新 token。
 """
 
-import asyncio
 import logging
 
-log = logging.getLogger("qwen2api.auth_resolver")
+from backend.core.qwen_headers import BASE_URL, qwen_api_headers
 
-BASE_URL = "https://chat.qwen.ai"
+log = logging.getLogger("qwen2api.auth_resolver")
 
 
 class AuthResolver:
@@ -52,12 +51,7 @@ class AuthResolver:
                 resp = await client.post(
                     f"{BASE_URL}/api/v1/auths/signin",
                     json={"email": email, "password": password},
-                    headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                        "Content-Type": "application/json",
-                        "Referer": f"{BASE_URL}/",
-                        "Origin": BASE_URL,
-                    }
+                    headers=qwen_api_headers(content_type="application/json"),
                 )
                 if resp.status_code == 200:
                     data = resp.json()

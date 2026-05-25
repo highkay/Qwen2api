@@ -10,6 +10,7 @@ import logging
 import uuid
 import time
 import re
+from dataclasses import dataclass, field
 from typing import Optional, AsyncGenerator
 
 from backend.core.account_pool import Account
@@ -25,86 +26,24 @@ from backend.core.config import settings
 
 log = logging.getLogger("qwen2api.engine")
 
+_REASONING_PHASES = {
+    "think",
+    "thought",
+    "thinking_summary",
+    "ResearchNotice",
+    "ResearchPlanning",
+    "ResearchSearching",
+    "ResearchReading",
+}
+_ANSWER_PHASES = {"answer", "image_edit_tool", "Writing"}
 
-# ── 统一入口 ──────────────────────────────────────────────────────────────────
 
-async def completions(
-    *,
-    client: QwenClient,
-    model: str,
-    prompt: str,
-    tools: list[dict],
-    stream: bool,
-    thinking: Optional[bool],
-    history_messages: list,
-    model_name: str = "",
-    completion_id: str = "",
-    created: int = 0,
-):
-    """统一 completion 执行器。
+def _is_reasoning_phase(phase: str) -> bool:
+    return phase in _REASONING_PHASES
 
-    stream=True  -> AsyncGenerator，yield OpenAI SSE 格式行
-    stream=False -> dict，完整 OpenAI chat.completion 响应
 
-    参数：
-        client          QwenClient 实例
-        model           Qwen 真实模型名（已 resolve）
-        prompt          已构建好的 prompt 字符串
-        tools           工具定义列表（空列表=无工具）
-        stream          是否流式
-        thinking        True=强制思考 / False=关闭 / None=自动
-        history_messages 原始 messages（工具循环检测用）
-        model_name      原始模型名（响应中的 model 字段）
-        completion_id   响应 ID（不传则自动生成）
-        created         时间戳（不传则自动生成）
-    """
-    if not completion_id:
-        completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
-    if not created:
-        created = int(time.time())
-    if not model_name:
-        model_name = model
-
-    max_attempts = settings.TOOL_MAX_RETRIES if tools else settings.MAX_RETRIES
-
-    if stream:
-        if tools:
-            return _stream_with_tools(
-                client=client,
-                qwen_model=model,
-                prompt=prompt,
-                tools=tools,
-                thinking=thinking,
-                history_messages=history_messages,
-                completion_id=completion_id,
-                created=created,
-                model_name=model_name,
-                max_attempts=max_attempts,
-            )
-        else:
-            return _stream_no_tools(
-                client=client,
-                qwen_model=model,
-                prompt=prompt,
-                thinking=thinking,
-                completion_id=completion_id,
-                created=created,
-                model_name=model_name,
-                max_attempts=max_attempts,
-            )
-    else:
-        return await _batch(
-            client=client,
-            qwen_model=model,
-            prompt=prompt,
-            tools=tools,
-            thinking=thinking,
-            history_messages=history_messages,
-            completion_id=completion_id,
-            created=created,
-            model_name=model_name,
-            max_attempts=max_attempts,
-        )
+def _is_answer_phase(phase: str) -> bool:
+    return phase in _ANSWER_PHASES
 
 
 # ============================================================================
@@ -114,7 +53,8 @@ async def completions(
 async def _stream_items_with_keepalive(client, model: str, prompt: str,
                                        has_custom_tools: bool, xml_mode: bool = False,
                                        exclude_accounts=None, thinking: bool = None,
-                                       files: list[dict] = None):
+                                       files: list[dict] = None,
+                                       chat_mode: str = "t2t"):
     """包装上游流式事件，添加 keepalive 心跳防止连接超时。"""
     queue: aio.Queue = aio.Queue()
 
@@ -123,7 +63,7 @@ async def _stream_items_with_keepalive(client, model: str, prompt: str,
             async for item in client.chat_stream_events_with_retry(
                 model, prompt, has_custom_tools=has_custom_tools,
                 xml_mode=xml_mode, exclude_accounts=exclude_accounts,
-                thinking=thinking, files=files
+                thinking=thinking, files=files, chat_mode=chat_mode
             ):
                 await queue.put(("item", item))
         except Exception as e:
@@ -166,7 +106,7 @@ def _extract_blocked_tool_names(text: str) -> list[str]:
 
 def _parse_events_to_text(events: list[dict]) -> tuple[str, str, dict, list[str]]:
     """从事件列表中解析出 answer_text, reasoning_text, native_tc_chunks, image_urls。
-    
+
     支持 image_edit_tool phase（图生图场景）。
     Returns: (answer_text, reasoning_text, native_tc_chunks, image_urls)
     """
@@ -199,14 +139,10 @@ def _parse_events_to_text(events: list[dict]) -> tuple[str, str, dict, list[str]
                     elif isinstance(item, str) and item.startswith("http"):
                         image_urls.append(item)
 
-        if phase in ("think", "thinking_summary") and content:
-            reasoning_text += content
-        elif phase == "answer" and content:
-            answer_text += content
-        elif phase == "image_edit_tool" and content:
-            # image_edit_tool 的 content 可能包含图片信息或文本描述
-            answer_text += content
-        elif phase == "tool_call" and content:
+        reasoning = evt.get("reasoning_content", "")
+        if reasoning:
+            reasoning_text += reasoning
+        if phase == "tool_call" and content:
             tc_id = extra.get("tool_call_id", "tc_0")
             if tc_id not in native_tc_chunks:
                 native_tc_chunks[tc_id] = {"name": "", "args": ""}
@@ -218,7 +154,13 @@ def _parse_events_to_text(events: list[dict]) -> tuple[str, str, dict, list[str]
                     native_tc_chunks[tc_id]["args"] += chunk["arguments"]
             except (json.JSONDecodeError, ValueError):
                 native_tc_chunks[tc_id]["args"] += content
-        if evt.get("status") == "finished" and phase == "answer":
+        elif _is_reasoning_phase(phase) and content:
+            reasoning_text += content
+        elif _is_answer_phase(phase) and content:
+            answer_text += content
+        elif content and not reasoning:
+            answer_text += content
+        if evt.get("status") == "finished" and _is_answer_phase(phase):
             break
 
     # 如果从事件中提取到了图片 URL，附加到 answer_text
@@ -286,6 +228,7 @@ async def completions(
     history_messages: list,
     model_name: str = "",
     files: list[dict] = None,
+    chat_mode: str = "t2t",
 ) -> "dict | AsyncGenerator[str, None]":
     """统一 completion 执行器。
 
@@ -299,18 +242,19 @@ async def completions(
             return _stream_with_tools(
                 client=client, model=model, prompt=prompt, tools=tools,
                 thinking=thinking, history_messages=history_messages,
-                model_name=model_name, files=files,
+                model_name=model_name, files=files, chat_mode=chat_mode,
             )
         else:
             return _stream_no_tools(
                 client=client, model=model, prompt=prompt,
                 thinking=thinking, model_name=model_name, files=files,
+                chat_mode=chat_mode,
             )
     else:
         return await _batch(
             client=client, model=model, prompt=prompt, tools=tools,
             thinking=thinking, history_messages=history_messages,
-            model_name=model_name, files=files,
+            model_name=model_name, files=files, chat_mode=chat_mode,
         )
 
 
@@ -321,6 +265,7 @@ async def completions(
 async def _stream_no_tools(
     *, client: QwenClient, model: str, prompt: str,
     thinking: Optional[bool], model_name: str, files: list[dict] = None,
+    chat_mode: str = "t2t",
 ) -> AsyncGenerator[str, None]:
     """无工具流式：事件到来立即转发给客户端。"""
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
@@ -336,13 +281,13 @@ async def _stream_no_tools(
             sent_role = False
             streamed_len = 0
             thought_sent = False  # 标记是否已发过 thought 内容
-            reasoning_sent_len = 0  # 已发送的 reasoning 字符数（用于去重累积式推送）
+            reasoning_sent_by_key: dict[str, str] = {}  # 上游可能按 phase 发送累积式 reasoning
             upstream_usage = None  # 上游真实 usage（从 SSE 事件中提取）
 
             async for item in _stream_items_with_keepalive(
                 client, model, current_prompt, has_custom_tools=False,
                 xml_mode=False, exclude_accounts=excluded_accounts, thinking=thinking,
-                files=files
+                files=files, chat_mode=chat_mode
             ):
                 if item["type"] == "keepalive":
                     yield ": keepalive\n\n"
@@ -384,26 +329,30 @@ async def _stream_no_tools(
                                     if isinstance(_tv, str) and _tv.startswith("http") and not content:
                                         content = f"![image]({_tv})"
 
-                # 思考内容透传（thought 实时流 + thinking_summary 摘要都透传）
-                if (phase == "thought" or phase == "thinking_summary" or reasoning) and not content:
+                # 思考/研究阶段透传（deep_research 会把检索、阅读、规划放在独立 phase）
+                if reasoning or (_is_reasoning_phase(phase) and content):
                     # 如果已发过 thought 实时流，跳过 thinking_summary 避免重复
                     if phase == "thinking_summary" and thought_sent:
                         continue
-                    if phase == "thought":
+                    if phase in ("think", "thought"):
                         thought_sent = True
-                    # 去重：如果上游发的是累积全文，只取增量部分
                     full_reasoning = reasoning or content
-                    if len(full_reasoning) > reasoning_sent_len:
-                        delta_reasoning = full_reasoning[reasoning_sent_len:]
-                        reasoning_sent_len = len(full_reasoning)
+                    dedupe_key = "reasoning_content" if reasoning else phase or "reasoning"
+                    previous = reasoning_sent_by_key.get(dedupe_key, "")
+                    if full_reasoning.startswith(previous):
+                        delta_reasoning = full_reasoning[len(previous):]
                     else:
-                        continue  # 没有新内容，跳过
-                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model_name, 'choices': [{'index': 0, 'delta': {'reasoning_content': delta_reasoning}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
-                    streamed_len += len(delta_reasoning)
+                        delta_reasoning = full_reasoning
+                    reasoning_sent_by_key[dedupe_key] = full_reasoning
+                    if delta_reasoning:
+                        yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model_name, 'choices': [{'index': 0, 'delta': {'reasoning_content': delta_reasoning}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
+                        streamed_len += len(delta_reasoning)
+                    else:
+                        continue
                     continue
 
-                # 正文内容 — 打字机效果（也处理 image_edit_tool phase 的内容输出）
-                if (phase in ("answer", "image_edit_tool") or content) and content:
+                # 正文内容 — 打字机效果（也处理 image_edit_tool / Writing phase 的内容输出）
+                if (_is_answer_phase(phase) or content) and content:
                     if not sent_role:
                         yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model_name, 'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
                         sent_role = True
@@ -475,6 +424,7 @@ async def _stream_with_tools(
     *, client: QwenClient, model: str, prompt: str, tools: list[dict],
     thinking: Optional[bool], history_messages: list, model_name: str,
     files: list[dict] = None,
+    chat_mode: str = "t2t",
 ) -> AsyncGenerator[str, None]:
     """有工具流式：缓冲所有事件，检测工具调用后一次性输出。"""
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
@@ -496,7 +446,7 @@ async def _stream_with_tools(
             async for item in _stream_items_with_keepalive(
                 client, model, current_prompt, has_custom_tools=True,
                 xml_mode=force_xml_mode, exclude_accounts=excluded_accounts,
-                thinking=thinking, files=files
+                thinking=thinking, files=files, chat_mode=chat_mode
             ):
                 if item["type"] == "keepalive":
                     yield ": keepalive\n\n"
@@ -516,10 +466,13 @@ async def _stream_with_tools(
 
                 phase = evt.get("phase", "")
                 content = evt.get("content", "")
+                reasoning = evt.get("reasoning_content", "")
 
-                if phase in ("think", "thinking_summary") and content:
+                if reasoning:
+                    reasoning_text += reasoning
+                if _is_reasoning_phase(phase) and content:
                     reasoning_text += content
-                elif phase == "answer" and content:
+                elif _is_answer_phase(phase) and content:
                     answer_text += content
                 elif phase == "tool_call" and content:
                     tc_id = evt.get("extra", {}).get("tool_call_id", "tc_0")
@@ -533,7 +486,9 @@ async def _stream_with_tools(
                             native_tc_chunks[tc_id]["args"] += chunk["arguments"]
                     except (json.JSONDecodeError, ValueError):
                         native_tc_chunks[tc_id]["args"] += content
-                if evt.get("status") == "finished" and phase == "answer":
+                elif content and not reasoning:
+                    answer_text += content
+                if evt.get("status") == "finished" and _is_answer_phase(phase):
                     break
 
             # 诊断日志
@@ -601,11 +556,12 @@ async def _stream_with_tools(
                         continue
 
             # 输出结果
-            mk = lambda delta, finish=None: json.dumps({
-                "id": completion_id, "object": "chat.completion.chunk",
-                "created": created, "model": model_name,
-                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]
-            }, ensure_ascii=False)
+            def mk(delta, finish=None):
+                return json.dumps({
+                    "id": completion_id, "object": "chat.completion.chunk",
+                    "created": created, "model": model_name,
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]
+                }, ensure_ascii=False)
 
             yield f"data: {mk({'role': 'assistant'})}\n\n"
 
@@ -652,6 +608,7 @@ async def _batch(
     *, client: QwenClient, model: str, prompt: str, tools: list[dict],
     thinking: Optional[bool], history_messages: list, model_name: str,
     files: list[dict] = None,
+    chat_mode: str = "t2t",
 ) -> dict:
     """非流式：收集所有事件，返回完整 OpenAI chat.completion 响应。"""
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
@@ -670,7 +627,7 @@ async def _batch(
             async for item in client.chat_stream_events_with_retry(
                 model, current_prompt, has_custom_tools=bool(tools),
                 xml_mode=force_xml_mode, exclude_accounts=excluded_accounts,
-                thinking=thinking, files=files
+                thinking=thinking, files=files, chat_mode=chat_mode
             ):
                 if item["type"] == "meta":
                     chat_id = item["chat_id"]
@@ -745,7 +702,7 @@ async def _batch(
                             "Do NOT call Read again on the same target. Choose another tool now."
                         )
                         current_prompt = _inject_force_text(current_prompt, force_text)
-                        log.warning(f"[Engine-Batch] 阻止重复 Read")
+                        log.warning("[Engine-Batch] 阻止重复 Read")
                         await aio.sleep(0.15)
                         continue
 
@@ -790,7 +747,7 @@ async def _batch(
                 "usage": usage,
             }
 
-        except Exception as e:
+        except Exception:
             if acc and acc.inflight > 0:
                 client.account_pool.release(acc)
                 if chat_id:
@@ -821,13 +778,6 @@ def _inject_force_text(prompt: str, reason: str) -> str:
         return prompt + "\n\n" + force_text + "\nAssistant:"
 
 
-# ============================================================================
-# 协议无关的结构化结果（Phase 2 新增）
-# ============================================================================
-
-from dataclasses import dataclass, field
-
-
 @dataclass
 class CompletionResult:
     """协议无关的 completion 结果，供各协议路由层格式化。"""
@@ -847,6 +797,7 @@ async def completions_raw(
     thinking: Optional[bool],
     history_messages: list,
     files: list[dict] = None,
+    chat_mode: str = "t2t",
 ) -> CompletionResult:
     """协议无关的 completion 执行器（非流式）。
 
@@ -867,7 +818,7 @@ async def completions_raw(
             async for item in client.chat_stream_events_with_retry(
                 model, current_prompt, has_custom_tools=bool(tools),
                 xml_mode=force_xml_mode, exclude_accounts=excluded_accounts,
-                thinking=thinking, files=files
+                thinking=thinking, files=files, chat_mode=chat_mode
             ):
                 if item["type"] == "meta":
                     chat_id = item["chat_id"]
@@ -952,7 +903,7 @@ async def completions_raw(
                 usage=usage,
             )
 
-        except Exception as e:
+        except Exception:
             if acc and acc.inflight > 0:
                 client.account_pool.release(acc)
                 if chat_id:

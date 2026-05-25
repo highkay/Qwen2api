@@ -9,6 +9,7 @@ import threading
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from backend.core.config import settings
+from backend.core.qwen_headers import BASE_URL, qwen_api_headers
 from . import _require_admin
 
 log = logging.getLogger("qwen2api.admin")
@@ -106,7 +107,7 @@ async def batch_import_accounts(request: Request, _=Depends(_require_admin)):
 
     elif "lines" in body:
         lines_raw = body["lines"]
-        lines = [l.strip() for l in str(lines_raw).splitlines() if l.strip()]
+        lines = [line_text.strip() for line_text in str(lines_raw).splitlines() if line_text.strip()]
         for i, line in enumerate(lines):
             parts = line.split(":", 2)
             if len(parts) == 3:
@@ -342,18 +343,18 @@ async def disable_memory_all(request: Request, _=Depends(_require_admin)):
     import httpx
     from fastapi.responses import StreamingResponse
     pool = request.app.state.account_pool
-    
+
     try:
         body = await request.json()
     except Exception:
         body = {}
     target_emails = body.get("emails", [])
-    
+
     if target_emails:
         accounts_list = [acc for acc in pool.all_accounts() if acc.email in target_emails]
     else:
         accounts_list = pool.all_accounts()
-    
+
     total = len(accounts_list)
 
     async def _stream_progress():
@@ -370,12 +371,7 @@ async def disable_memory_all(request: Request, _=Depends(_require_admin)):
                 success += 1  # 已关闭，跳过
                 return
             try:
-                headers = {
-                    "Authorization": f"Bearer {acc.token}",
-                    "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Origin": "https://chat.qwen.ai",
-                }
+                headers = qwen_api_headers(acc.token, content_type="application/json")
                 body_data = {
                     "memory": {"enable_memory": False, "enable_history_memory": False},
                     "tools_enabled": {
@@ -384,11 +380,11 @@ async def disable_memory_all(request: Request, _=Depends(_require_admin)):
                     }
                 }
                 async with httpx.AsyncClient(timeout=10) as hc:
-                    resp = await hc.post("https://chat.qwen.ai/api/v2/users/user/settings/update", headers=headers, json=body_data)
+                    resp = await hc.post(f"{BASE_URL}/api/v2/users/user/settings/update", headers=headers, json=body_data)
                     if resp.status_code != 200:
                         failed += 1
                         return
-                    await hc.post("https://chat.qwen.ai/api/v2/memories/delete", headers=headers, json={"forget_all": True})
+                    await hc.post(f"{BASE_URL}/api/v2/memories/delete", headers=headers, json={"forget_all": True})
                 success += 1
                 acc.memory_disabled = True
             except Exception:

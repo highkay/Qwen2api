@@ -6,20 +6,19 @@ register.py — 批量注册服务
 import asyncio
 import base64
 import hashlib
-import json
 import logging
-import os
 import secrets
-import sys
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Optional
+
+from backend.core.qwen_headers import BASE_URL, qwen_api_headers, qwen_impersonate
 
 log = logging.getLogger("qwen2api.register")
 
 # Qwen 注册端点
-SIGNUP_URL = "https://chat.qwen.ai/api/v1/auths/signup"
+SIGNUP_URL = f"{BASE_URL}/api/v1/auths/signup"
 
 # 注册用的默认配置
 DEFAULT_PASSWORD_HASH = "3e44fb4816bed138eb46440954b79b3518d6cde7a58248d770410cb6be563c89"
@@ -66,14 +65,14 @@ def _oauth_device_flow(session, email, cookie_header=""):
     code_verifier, code_challenge = _generate_pkce()
 
     device_resp = session.post(
-        "https://chat.qwen.ai/api/v1/oauth2/device/code",
+        f"{BASE_URL}/api/v1/oauth2/device/code",
         data={
             "client_id": client_id,
             "scope": scope,
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
         },
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        headers=qwen_api_headers(content_type="application/x-www-form-urlencoded"),
     )
     if device_resp.status_code != 200:
         raise RuntimeError(
@@ -85,9 +84,9 @@ def _oauth_device_flow(session, email, cookie_header=""):
     user_code = device_data.get("user_code", "")
 
     if user_code and cookie_header:
-        auth_headers = {"Content-Type": "application/json", "Cookie": cookie_header}
+        auth_headers = qwen_api_headers(content_type="application/json", extra={"Cookie": cookie_header})
         auth_resp = session.post(
-            "https://chat.qwen.ai/api/v2/oauth2/authorize",
+            f"{BASE_URL}/api/v2/oauth2/authorize",
             json={"approved": True, "user_code": user_code},
             headers=auth_headers,
         )
@@ -100,14 +99,14 @@ def _oauth_device_flow(session, email, cookie_header=""):
     for attempt in range(60):
         time.sleep(5)
         token_resp = session.post(
-            "https://chat.qwen.ai/api/v1/oauth2/token",
+            f"{BASE_URL}/api/v1/oauth2/token",
             data={
                 "grant_type": grant_type,
                 "client_id": client_id,
                 "device_code": device_code,
                 "code_verifier": code_verifier,
             },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            headers=qwen_api_headers(content_type="application/x-www-form-urlencoded"),
         )
 
         if token_resp.status_code == 200:
@@ -173,7 +172,8 @@ def _register_single_account(provider: str = "default", moemail_domain: str = ""
         email_addr = addr_info["address"]
         email_id = addr_info["id"]
         log.info(f"[Register] MoeMail 邮箱获取成功: {email_addr}")
-        verify_url_fetcher = lambda: moe.poll_for_activation_link(email_id, max_polls=mail_poll_times)
+        def verify_url_fetcher():
+            return moe.poll_for_activation_link(email_id, max_polls=mail_poll_times)
 
     elif provider == "tempmail":
         if not tempmail_domain or not tempmail_key:
@@ -189,7 +189,8 @@ def _register_single_account(provider: str = "default", moemail_domain: str = ""
         email_addr = addr_info["address"]
         jwt = addr_info["jwt"]
         log.info(f"[Register] TempMail 邮箱获取成功: {email_addr}")
-        verify_url_fetcher = lambda: tmp.poll_for_activation_link(jwt, max_polls=mail_poll_times)
+        def verify_url_fetcher():
+            return tmp.poll_for_activation_link(jwt, max_polls=mail_poll_times)
 
     elif provider == "vipmail":
         if not vipmail_key:
@@ -204,11 +205,12 @@ def _register_single_account(provider: str = "default", moemail_domain: str = ""
         email_addr = addr_info["address"]
         mail_token = addr_info.get("token", "")
         log.info(f"[Register] VipMail 邮箱获取成功: {email_addr}")
-        verify_url_fetcher = lambda: vip.poll_for_activation_link(
-            email_addr,
-            token=mail_token,
-            max_polls=mail_poll_times,
-        )
+        def verify_url_fetcher():
+            return vip.poll_for_activation_link(
+                email_addr,
+                token=mail_token,
+                max_polls=mail_poll_times,
+            )
 
     elif provider == "guerrilla":
         # 官方 GuerrillaMail API
@@ -220,7 +222,8 @@ def _register_single_account(provider: str = "default", moemail_domain: str = ""
             return None
         email_addr = addr_info["address"]
         log.info(f"[Register] GuerrillaMail 邮箱获取成功: {email_addr}")
-        verify_url_fetcher = lambda: gm.poll_for_activation_link(max_polls=mail_poll_times)
+        def verify_url_fetcher():
+            return gm.poll_for_activation_link(max_polls=mail_poll_times)
 
     elif provider in ("default", "gptmail"):
         # 默认渠道：GPTMail (mail.chatgpt.org.uk) — 自动获取公共 API Key
@@ -232,7 +235,8 @@ def _register_single_account(provider: str = "default", moemail_domain: str = ""
             return None
         email_addr = addr_info["address"]
         log.info(f"[Register] GPTMail 邮箱获取成功: {email_addr}")
-        verify_url_fetcher = lambda: gptmail.poll_for_activation_link(email_addr, max_polls=mail_poll_times)
+        def verify_url_fetcher():
+            return gptmail.poll_for_activation_link(email_addr, max_polls=mail_poll_times)
 
     else:
         log.error(f"[Register] 未知邮箱渠道: {provider}")
@@ -255,7 +259,7 @@ def _register_single_account(provider: str = "default", moemail_domain: str = ""
 
     try:
         from curl_cffi import requests as curl_requests
-        with curl_requests.Session(impersonate="chrome119") as session:
+        with curl_requests.Session(impersonate=qwen_impersonate()) as session:
             # 注入浏览器获取的 cookies
             for k, v in browser_cookies.items():
                 session.cookies.set(k, v, domain=".chat.qwen.ai")
@@ -273,7 +277,7 @@ def _register_single_account(provider: str = "default", moemail_domain: str = ""
             log.info(f"[Register] 开始获取令牌: {email_addr}...")
             try:
                 token_data = _oauth_device_flow(session, email_addr, cookie_header=cookie_header)
-            except Exception as e:
+            except Exception:
                 log.warning(f"[Register] 令牌获取失败: {email_addr}")
                 token_data = None
 
@@ -384,12 +388,7 @@ async def perform_batch_registration(
                 # 关闭新账号的记忆功能
                 try:
                     import httpx
-                    headers = {
-                        "Authorization": f"Bearer {result['token']}",
-                        "Content-Type": "application/json",
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                        "Origin": "https://chat.qwen.ai",
-                    }
+                    headers = qwen_api_headers(result["token"], content_type="application/json")
                     body = {
                         "memory": {"enable_memory": False, "enable_history_memory": False},
                         "tools_enabled": {
@@ -398,7 +397,7 @@ async def perform_batch_registration(
                         }
                     }
                     async with httpx.AsyncClient(timeout=10) as hc:
-                        await hc.post("https://chat.qwen.ai/api/v2/users/user/settings/update", headers=headers, json=body)
+                        await hc.post(f"{BASE_URL}/api/v2/users/user/settings/update", headers=headers, json=body)
                     log.info(f"[Register] 已关闭新账号记忆功能: {result['email']}")
                 except Exception:
                     pass

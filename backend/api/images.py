@@ -89,7 +89,6 @@ async def create_image(request: Request):
     }
     ```
     """
-    from backend.core.config import settings
     client: QwenClient = request.app.state.qwen_client
 
     # 鉴权（统一模块）
@@ -189,7 +188,8 @@ async def create_image(request: Request):
         # 处理 response_format
         response_format = body.get("response_format", "url")
         if response_format == "b64_json":
-            import httpx, base64
+            import httpx
+            import base64
             from backend.services.image_proxy import save_image
             b64_data = []
             async with httpx.AsyncClient(timeout=30, follow_redirects=True) as hc:
@@ -262,7 +262,6 @@ async def edit_image(request: Request):
     接收图片 + prompt，通过 Qwen 多模态对话实现图生图。
     Cherry Studio 等客户端的图生图功能会调用此端点。
     """
-    from backend.core.config import settings
     from backend.services.file_uploader import upload_file, _guess_extension
     import base64
 
@@ -352,6 +351,7 @@ async def edit_image(request: Request):
             history_messages=messages,
             model_name="qwen-image",
             files=uploaded_files,
+            chat_mode="t2i",
         )
 
         # 从响应中提取图片 URL
