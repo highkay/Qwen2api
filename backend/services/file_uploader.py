@@ -17,6 +17,7 @@ import time
 import uuid
 from typing import Optional
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import httpx
 
@@ -52,46 +53,67 @@ class UploadedFile:
         file_class = _get_file_class(self.mime_type)
         ts = int(time.time() * 1000)
         is_image = file_class == "vision"
+        display_type = _get_display_type(file_class)
 
-        # 图片和文档的 meta 格式不同
-        if is_image:
-            meta = {
-                "name": self.filename,
-                "size": self.size,
-                "content_type": self.mime_type,
-            }
-        else:
-            meta = {
-                "name": self.filename,
-                "size": self.size,
-                "content_type": self.mime_type,
-                "parse_meta": {"parse_status": "success"},
-            }
+        meta = {
+            "name": self.filename,
+            "size": self.size,
+            "content_type": self.mime_type,
+        }
+        if file_class == "document":
+            meta["parse_meta"] = {"parse_status": "success"}
 
-        return {
-            "type": "image" if is_image else "file",
-            "file": {
-                "created_at": ts,
-                "data": {},
-                "filename": self.filename,
-                "hash": None,
-                "id": self.file_id,
-                "meta": meta,
-                "update_at": ts,
-            },
+        file_obj = {
+            "created_at": ts,
+            "data": {},
+            "filename": self.filename,
+            "hash": None,
+            "id": self.file_id,
+            "meta": meta,
+            "update_at": ts,
+        }
+        user_id = _extract_user_id_from_url(self.url)
+        if user_id:
+            file_obj["user_id"] = user_id
+
+        payload = {
+            "type": display_type,
+            "file": file_obj,
             "id": self.file_id,
             "url": self.url,
             "name": self.filename,
             "collection_name": "",
-            "progress": 0,
+            "progress": 0 if is_image else 100,
             "status": "uploaded",
-            "greenNet": "success",
+            "greenNet": "greening" if file_class == "video" else "success",
             "size": self.size,
             "error": "",
             "file_type": self.mime_type,
-            "showType": "image" if is_image else "file",
+            "showType": display_type,
             "file_class": file_class,
         }
+        if file_class == "video":
+            payload["itemId"] = str(uuid.uuid4())
+            payload["uploadTaskId"] = str(uuid.uuid4())
+        return payload
+
+
+def _get_display_type(file_class: str) -> str:
+    """返回 Qwen Web files 数组使用的 type/showType。"""
+    if file_class == "vision":
+        return "image"
+    if file_class in {"audio", "video"}:
+        return file_class
+    return "file"
+
+
+def _extract_user_id_from_url(url: str) -> str:
+    """从 Qwen OSS URL 的首段路径中提取 user_id。"""
+    try:
+        parts = [part for part in urlparse(url).path.split("/") if part]
+    except Exception:
+        return ""
+    return parts[0] if parts else ""
 
 
 def _get_file_class(mime: str) -> str:
@@ -125,8 +147,10 @@ def _guess_extension(mime: str) -> str:
         "image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif",
         "image/webp": ".webp", "image/svg+xml": ".svg",
         "application/pdf": ".pdf", "text/plain": ".txt", "text/markdown": ".md",
-        "audio/mpeg": ".mp3", "audio/wav": ".wav",
-        "video/mp4": ".mp4", "video/webm": ".webm",
+        "audio/mpeg": ".mp3", "audio/wav": ".wav", "audio/ogg": ".ogg",
+        "audio/flac": ".flac", "audio/aac": ".aac", "audio/x-m4a": ".m4a",
+        "video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov",
+        "video/x-matroska": ".mkv",
     }
     return ext_map.get(mime, ".bin")
 
@@ -331,6 +355,8 @@ async def extract_files_from_messages(messages: list) -> list[tuple[bytes, str, 
     支持格式：
     - {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
     - {"type": "image_url", "image_url": {"url": "https://..."}}
+    - {"type": "file", "file": {"data": "<base64>", "name": "video.mp4", "mime_type": "video/mp4"}}
+    - {"type": "input_file", "file_data": "data:video/mp4;base64,...", "filename": "video.mp4"}
 
     Returns:
         [(file_bytes, filename, mime_type), ...]
@@ -365,7 +391,58 @@ async def extract_files_from_messages(messages: list) -> list[tuple[bytes, str, 
                     fn = f"image_{uuid.uuid4().hex[:8]}{_guess_extension(mime)}"
                     files.append((fb, fn, mime))
 
+            elif btype in {"file", "input_file"}:
+                fb, fn, mt = await _resolve_file_block(block)
+                if fb:
+                    files.append((fb, fn, mt))
+
     return files
+
+
+async def _resolve_file_block(block: dict) -> tuple[Optional[bytes], str, str]:
+    """解析 OpenAI/Responses 风格的通用文件块。"""
+    file_info = block.get("file", block)
+    if not isinstance(file_info, dict):
+        return None, "", ""
+
+    mime = (
+        file_info.get("mime_type")
+        or file_info.get("media_type")
+        or file_info.get("content_type")
+        or "application/octet-stream"
+    )
+    filename = (
+        file_info.get("name")
+        or file_info.get("filename")
+        or f"file_{uuid.uuid4().hex[:8]}{_guess_extension(mime)}"
+    )
+
+    data = file_info.get("data") or file_info.get("file_data")
+    if isinstance(data, str) and data:
+        try:
+            if data.startswith("data:"):
+                header, data = data.split(",", 1)
+                parsed_mime = header.split(":", 1)[1].split(";", 1)[0]
+                if parsed_mime:
+                    mime = parsed_mime
+                if not (file_info.get("name") or file_info.get("filename")):
+                    filename = f"file_{uuid.uuid4().hex[:8]}{_guess_extension(mime)}"
+            return base64.b64decode(data), filename, mime
+        except Exception as e:
+            log.warning(f"[FileUploader] file base64 decode failed: {e}")
+            return None, "", ""
+
+    url = file_info.get("url") or file_info.get("file_url")
+    if isinstance(url, str) and url:
+        fb, downloaded_name, downloaded_mime = await _resolve_image_url(url)
+        if fb:
+            if not (file_info.get("name") or file_info.get("filename")):
+                filename = downloaded_name
+            if mime == "application/octet-stream":
+                mime = downloaded_mime
+            return fb, filename, mime
+
+    return None, "", ""
 
 
 async def _resolve_image_url(url: str) -> tuple[Optional[bytes], str, str]:

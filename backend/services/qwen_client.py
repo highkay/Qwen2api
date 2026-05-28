@@ -68,10 +68,11 @@ class QwenClient:
 
     async def create_chat(self, token: str, model: str, chat_mode: str = "t2t") -> str:
         ts = int(time.time() * 1000)
+        web_chat_mode = "normal" if chat_mode == "t2t" else chat_mode
         body = {
             "title": f"api_{ts}",
             "models": [model],
-            "chat_mode": chat_mode,
+            "chat_mode": web_chat_mode,
             "chat_type": chat_mode,
             "timestamp": ts,
             "project_id": "",
@@ -262,9 +263,10 @@ class QwenClient:
             feature_config["image_generation"] = True
         if chat_mode == "t2v":
             feature_config["video_generation"] = True
+        web_chat_mode = "normal" if chat_mode == "t2t" else chat_mode
         return {
             "stream": True, "version": "2.1", "incremental_output": True,
-            "chat_id": chat_id, "chat_mode": chat_mode, "model": model, "parent_id": None,
+            "chat_id": chat_id, "chat_mode": web_chat_mode, "model": model, "parent_id": None,
             "messages": [{
                 "fid": str(uuid.uuid4()), "parentId": None, "childrenIds": [str(uuid.uuid4())],
                 "role": "user", "content": content, "user_action": "chat", "files": files or [],
