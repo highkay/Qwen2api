@@ -16,6 +16,8 @@ import re
 import uuid
 import logging
 
+from .tool_transform import resolve_original_tool_name
+
 log = logging.getLogger("qwen2api.tool_parser")
 
 
@@ -199,7 +201,6 @@ def parse_tool_calls(text: str, tools: list[dict]) -> tuple[list[dict], str]:
     if not tools or not text:
         return [], "end_turn"
 
-    tool_names = {t.get("name", "") for t in tools}
     blocks: list[dict] = []
 
     # 在去除代码围栏后的文本上做匹配
@@ -224,15 +225,13 @@ def parse_tool_calls(text: str, tools: list[dict]) -> tuple[list[dict], str]:
             if not name:
                 continue
 
-            # 工具名验证：必须在可用工具列表中
-            if tool_names and name not in tool_names:
-                # 模糊匹配：大小写不敏感
-                matched = next((tn for tn in tool_names if tn.lower() == name.lower()), None)
-                if matched:
-                    name = matched
-                else:
-                    log.debug(f"[ToolParser] 工具名不在列表中: {name}")
-                    continue
+            # 工具名验证：允许模型别名，最终回写客户端原名
+            resolved_name = resolve_original_tool_name(str(name), tools)
+            if resolved_name:
+                name = resolved_name
+            else:
+                log.debug(f"[ToolParser] 工具名不在列表中: {name}")
+                continue
 
             # 参数验证：确保是 dict
             if isinstance(inp, str):
@@ -295,7 +294,6 @@ def build_tool_blocks_from_native_chunks(
     if not native_tc_chunks:
         return [], "end_turn"
 
-    tool_names = {t.get("name", "") for t in tools} if tools else set()
     blocks: list[dict] = []
 
     for tc_id, tc in native_tc_chunks.items():
@@ -305,11 +303,11 @@ def build_tool_blocks_from_native_chunks(
         if not name:
             continue
 
-        # 工具名验证（含模糊匹配）
-        if tool_names and name not in tool_names:
-            matched = next((tn for tn in tool_names if tn.lower() == name.lower()), None)
-            if matched:
-                name = matched
+        # 工具名验证：允许模型别名，最终回写客户端原名
+        if tools:
+            resolved_name = resolve_original_tool_name(str(name), tools)
+            if resolved_name:
+                name = resolved_name
             else:
                 log.warning(f"[NativeFC] 原生工具名不在列表中: {name}")
                 continue

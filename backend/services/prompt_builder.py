@@ -11,6 +11,14 @@ prompt_builder.py -- 消息格式转换与工具调用 Prompt 注入
 import json
 from typing import Any
 
+from .tool_transform import (
+    format_compact_schema,
+    get_tool_model_name,
+    get_tool_original_name,
+    prepare_tool_defs_for_model,
+    resolve_model_tool_name,
+)
+
 
 # ============================================================================
 # 工具调用指令模板 -- 注意力优化结构：规则 -> 错误示例 -> 正确示例 -> 锚点
@@ -19,7 +27,7 @@ from typing import Any
 _TOOL_INSTRUCTIONS_HEADER = """\
 # Tool Calling Protocol
 
-You have access to the tools listed below. When you need to use a tool, output a tool call block in the EXACT format specified.
+You have access to the tools listed below. Tool names shown here are private aliases. When you need to use a tool, output a tool call block in the EXACT format specified and use the alias exactly as listed.
 
 ## FORMAT SPECIFICATION
 
@@ -33,7 +41,7 @@ You have access to the tools listed below. When you need to use a tool, output a
 
 1) Use the `[TOOL_CALL]...[/TOOL_CALL]` wrapper format. This is the ONLY accepted format.
 2) The content between the tags MUST be a single valid JSON object with exactly two keys: "name" and "arguments".
-3) "name" must be one of the available tool names listed below.
+3) "name" must be one of the available tool aliases listed below.
 4) "arguments" must be a JSON object matching the tool's parameter schema. All keys and string values must use double quotes.
 5) You may call multiple tools in one response using separate `[TOOL_CALL]...[/TOOL_CALL]` blocks.
 6) Do NOT wrap tool calls inside markdown code fences (``` ```). Output them directly.
@@ -41,7 +49,7 @@ You have access to the tools listed below. When you need to use a tool, output a
 8) Do NOT output explanations, apologies, or commentary AFTER a tool call block. The tool call must be the last content.
 9) Fill parameters with actual values required for this call. Do NOT emit placeholder, blank, or empty-string parameters.
 10) If a required parameter value is unknown, ask the user instead of outputting an empty tool call.
-11) For shell/command tools (Bash, execute_command, exec_command), the command MUST be inside the "command" parameter. Never call them with an empty command.
+11) For shell/command tools, the command MUST be inside the documented "command", "cmd", or "script" parameter. Never call them with an empty command.
 12) If tool results are already in the conversation history, use them directly. Do NOT call the same tool with the same arguments again.
 13) When you decide to call a tool, the `[TOOL_CALL]` block must appear as the LAST content in your response. No text after it.
 """
@@ -50,28 +58,28 @@ _TOOL_WRONG_EXAMPLES = """
 ## WRONG -- Do NOT do these:
 
 Wrong 1 -- XML tags (REJECTED by system):
-  <tool_call>{"name": "read_file", "arguments": {"path": "foo.py"}}</tool_call>
+  <tool_call>{"name": "u_read", "arguments": {"path": "foo.py"}}</tool_call>
 
 Wrong 2 -- Inside code fence (NOT detected):
   ```
   [TOOL_CALL]
-  {"name": "read_file", "arguments": {"path": "foo.py"}}
+  {"name": "u_read", "arguments": {"path": "foo.py"}}
   [/TOOL_CALL]
   ```
 
 Wrong 3 -- Missing or malformed JSON:
   [TOOL_CALL]
-  {name: read_file, arguments: {path: foo.py}}
+  {name: u_read, arguments: {path: foo.py}}
   [/TOOL_CALL]
 
 Wrong 4 -- Empty parameters:
   [TOOL_CALL]
-  {"name": "Bash", "arguments": {"command": ""}}
+  {"name": "u_exec", "arguments": {"command": ""}}
   [/TOOL_CALL]
 
 Wrong 5 -- Text after tool call:
   [TOOL_CALL]
-  {"name": "read_file", "arguments": {"path": "foo.py"}}
+  {"name": "u_read", "arguments": {"path": "foo.py"}}
   [/TOOL_CALL]
   I hope this helps!
 """
@@ -79,6 +87,20 @@ Wrong 5 -- Text after tool call:
 _TOOL_ANCHOR = """
 Remember: The ONLY valid way to call tools is the `[TOOL_CALL]...[/TOOL_CALL]` block. When you need to use a tool, output the block and STOP.
 """
+
+
+def _find_tool_def_by_name(name: str, tool_defs: list[dict]) -> dict | None:
+    """Find a tool by either its client name or model-facing alias."""
+    for td in tool_defs:
+        candidates = {get_tool_model_name(td), get_tool_original_name(td)}
+        if name in candidates:
+            return td
+    lowered = name.lower()
+    for td in tool_defs:
+        candidates = {get_tool_model_name(td), get_tool_original_name(td)}
+        if lowered in {candidate.lower() for candidate in candidates if candidate}:
+            return td
+    return None
 
 
 def _build_tool_examples(tool_defs: list[dict]) -> str:
@@ -130,9 +152,11 @@ def _pick_single_example(names: list[str], tool_defs: list[dict]) -> str:
     priority = ["Read", "read_file", "Glob", "list_files", "search_files",
                 "Bash", "execute_command", "exec_command", "Write", "write_to_file"]
     for p in priority:
-        if p in names:
-            params = _generate_example_params(p, tool_defs)
-            return f'[TOOL_CALL]\n{{"name": "{p}", "arguments": {params}}}\n[/TOOL_CALL]'
+        td = _find_tool_def_by_name(p, tool_defs)
+        if td:
+            name = get_tool_model_name(td)
+            params = _generate_example_params(name, tool_defs)
+            return f'[TOOL_CALL]\n{{"name": "{name}", "arguments": {params}}}\n[/TOOL_CALL]'
     # 用第一个工具
     name = names[0]
     params = _generate_example_params(name, tool_defs)
@@ -170,23 +194,26 @@ def _pick_script_example(names: list[str], tool_defs: list[dict]) -> str:
     """选择命令/脚本类工具生成长文本示例。"""
     script_tools = ["Bash", "execute_command", "exec_command", "Write", "write_to_file"]
     for st in script_tools:
-        if st in names:
-            if st in ("Bash", "execute_command"):
+        td = _find_tool_def_by_name(st, tool_defs)
+        if td:
+            name = get_tool_model_name(td)
+            original_name = get_tool_original_name(td)
+            if original_name in ("Bash", "execute_command"):
                 return (
                     f'[TOOL_CALL]\n'
-                    f'{{"name": "{st}", "arguments": {{"command": "find . -name \\"*.py\\" | head -20"}}}}\n'
+                    f'{{"name": "{name}", "arguments": {{"command": "find . -name \\"*.py\\" | head -20"}}}}\n'
                     f'[/TOOL_CALL]'
                 )
-            elif st == "exec_command":
+            elif original_name == "exec_command":
                 return (
                     f'[TOOL_CALL]\n'
-                    f'{{"name": "{st}", "arguments": {{"cmd": "ls -la src/"}}}}\n'
+                    f'{{"name": "{name}", "arguments": {{"cmd": "ls -la src/"}}}}\n'
                     f'[/TOOL_CALL]'
                 )
-            elif st in ("Write", "write_to_file"):
+            elif original_name in ("Write", "write_to_file"):
                 return (
                     f'[TOOL_CALL]\n'
-                    f'{{"name": "{st}", "arguments": {{"file_path": "hello.py", "content": "#!/usr/bin/env python3\\nprint(\'Hello, world!\')\\n"}}}}\n'
+                    f'{{"name": "{name}", "arguments": {{"file_path": "hello.py", "content": "#!/usr/bin/env python3\\nprint(\'Hello, world!\')\\n"}}}}\n'
                     f'[/TOOL_CALL]'
                 )
     return ""
@@ -194,6 +221,9 @@ def _pick_script_example(names: list[str], tool_defs: list[dict]) -> str:
 
 def _generate_example_params(name: str, tool_defs: list[dict]) -> str:
     """根据工具名和 schema 生成示例参数 JSON。"""
+    tool_def = _find_tool_def_by_name(name, tool_defs)
+    original_name = get_tool_original_name(tool_def) if tool_def else name
+
     # 常见工具的硬编码示例
     examples_map = {
         "Read": '{"file_path": "README.md"}',
@@ -211,12 +241,12 @@ def _generate_example_params(name: str, tool_defs: list[dict]) -> str:
         "Task": '{"description": "Investigate the bug", "prompt": "Find and fix the issue"}',
         "ask_followup_question": '{"question": "Which approach do you prefer?"}',
     }
-    if name in examples_map:
-        return examples_map[name]
+    if original_name in examples_map:
+        return examples_map[original_name]
 
     # 从 schema 生成
-    for td in tool_defs:
-        if td.get("name") != name:
+    for td in ([tool_def] if tool_def else tool_defs):
+        if not td:
             continue
         params_schema = td.get("parameters", {})
         properties = params_schema.get("properties", {})
@@ -248,18 +278,18 @@ def _generate_example_params(name: str, tool_defs: list[dict]) -> str:
 def _build_read_tool_guard(tool_defs: list[dict]) -> str:
     """如果有 Read 类工具，添加缓存防护指令。"""
     read_names = {"Read", "read_file", "ReadFile", "readFile"}
-    has_read = any(t.get("name", "") in read_names for t in tool_defs)
+    has_read = any(get_tool_original_name(t) in read_names for t in tool_defs)
     if not has_read:
         return ""
     return (
         "\n## Read Tool Cache Guard\n"
-        "If a Read/read_file tool result says the file is unchanged, already available in history, "
+        "If a file-reading tool result says the file is unchanged, already available in history, "
         "or provides no file body, treat that result as cached. Do NOT repeatedly call the same "
         "read request. Use the content from conversation history, or ask the user to provide it again.\n"
     )
 
 
-def _build_tool_choice_instruction(tool_choice: Any) -> str:
+def _build_tool_choice_instruction(tool_choice: Any, tool_defs: list[dict]) -> str:
     """根据 tool_choice 参数生成额外指令。"""
     if not tool_choice:
         return ""
@@ -273,7 +303,8 @@ def _build_tool_choice_instruction(tool_choice: Any) -> str:
         func = tool_choice.get("function", {})
         forced_name = func.get("name", "")
         if forced_name:
-            return f"\n## MANDATORY: You MUST call exactly this tool: `{forced_name}`. Do not call any other tool.\n"
+            model_name = resolve_model_tool_name(str(forced_name), tool_defs)
+            return f"\n## MANDATORY: You MUST call exactly this tool alias: `{model_name}`. Do not call any other tool.\n"
     return ""
 
 
@@ -337,6 +368,9 @@ def messages_to_prompt(req_data: dict) -> tuple[str, list[dict]]:
                 "parameters": t.get("input_schema", t.get("parameters", {})),
             })
 
+    if tool_defs:
+        tool_defs = prepare_tool_defs_for_model(tool_defs)
+
     # 构建工具说明字符串
     tool_system_injection = ""
     if tool_defs:
@@ -368,6 +402,7 @@ def messages_to_prompt(req_data: dict) -> tuple[str, list[dict]]:
                 for tc in tool_calls:
                     func = tc.get("function", {})
                     name = func.get("name", "")
+                    model_name = resolve_model_tool_name(str(name), tool_defs) if tool_defs else name
                     raw_args = func.get("arguments", "{}")
                     if isinstance(raw_args, str):
                         try:
@@ -377,7 +412,7 @@ def messages_to_prompt(req_data: dict) -> tuple[str, list[dict]]:
                     else:
                         args = raw_args or {}
                     tc_parts.append(
-                        f'[TOOL_CALL]\n{{"name": {json.dumps(name)}, "arguments": {json.dumps(args, ensure_ascii=False)}}}\n[/TOOL_CALL]'
+                        f'[TOOL_CALL]\n{{"name": {json.dumps(model_name)}, "arguments": {json.dumps(args, ensure_ascii=False)}}}\n[/TOOL_CALL]'
                     )
                 text_content = _content_to_str(msg.get("content", ""))
                 content_str = (text_content + "\n" if text_content else "") + "\n".join(tc_parts)
@@ -391,8 +426,9 @@ def messages_to_prompt(req_data: dict) -> tuple[str, list[dict]]:
         if role == "tool":
             tool_call_id = msg.get("tool_call_id", "")
             name = msg.get("name", "")
+            model_name = resolve_model_tool_name(str(name), tool_defs) if tool_defs else name
             content_str = _content_to_str(msg.get("content", ""))
-            result_block = f'[TOOL_RESULT name="{name}" id="{tool_call_id}"]\n{content_str}\n[/TOOL_RESULT]'
+            result_block = f'[TOOL_RESULT name="{model_name}" id="{tool_call_id}"]\n{content_str}\n[/TOOL_RESULT]'
             parts.append(f"Human: {result_block}")
             continue
 
@@ -441,7 +477,7 @@ def _build_full_tool_prompt(tool_defs: list[dict], tool_choice: Any = None) -> s
         sections.append(guard)
 
     # 6. tool_choice 指令
-    choice_inst = _build_tool_choice_instruction(tool_choice)
+    choice_inst = _build_tool_choice_instruction(tool_choice, tool_defs)
     if choice_inst:
         sections.append(choice_inst)
 
@@ -454,7 +490,8 @@ def _build_full_tool_prompt(tool_defs: list[dict], tool_choice: Any = None) -> s
         name = td.get("name", "")
         desc = td.get("description", "No description")
         params = td.get("parameters", {})
-        sections.append(f"### {name}\n{desc}\nParameters: {json.dumps(params, ensure_ascii=False)}\n")
+        compact_params = format_compact_schema(params)
+        sections.append(f"### {name}\n{desc}\nParameters (compact schema):\n{compact_params}\n")
 
     return "\n".join(sections)
 
@@ -463,6 +500,7 @@ def _build_parameter_shapes_guide(tool_defs: list[dict]) -> str:
     """生成参数形状指南，帮助模型理解如何构造参数。"""
     return """## PARAMETER SHAPES:
 
+- The tool list uses compact schemas: `field` is required, `field?` is optional.
 - string: `"key": "value"` (always double-quoted)
 - number: `"key": 123` or `"key": 3.14`
 - boolean: `"key": true` or `"key": false`

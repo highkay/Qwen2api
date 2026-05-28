@@ -5,16 +5,16 @@
 <h1 align="center">Qwen2api</h1>
 
 <p align="center">
-  <a href="https://github.com/jiujiu532/Qwen2api/actions/workflows/docker-publish.yml">
-    <img src="https://github.com/jiujiu532/Qwen2api/actions/workflows/docker-publish.yml/badge.svg" alt="Build"/>
+  <a href="https://github.com/highkay/Qwen2api/actions/workflows/docker-publish.yml">
+    <img src="https://github.com/highkay/Qwen2api/actions/workflows/docker-publish.yml/badge.svg" alt="Build"/>
   </a>
   <img src="https://img.shields.io/badge/python-3.12+-blue?logo=python" alt="Python"/>
-  <img src="https://img.shields.io/badge/docker-ghcr.io%2Fjiujiu532%2Fqwen2api-blue?logo=docker" alt="Docker"/>
+  <img src="https://img.shields.io/badge/docker-ghcr.io%2Fhighkay%2Fqwen2api-blue?logo=docker" alt="Docker"/>
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License"/>
 </p>
 
 <p align="center">
-  Qwen AI Reverse Gateway -- OpenAI / Anthropic / Gemini API Compatible
+  Qwen AI Reverse Gateway -- OpenAI / Anthropic API Compatible
 </p>
 
 <p align="center"><a href="README.md">中文</a> | English</p>
@@ -27,12 +27,13 @@ Qwen2api exposes Alibaba's Qwen (Tongyi Qianwen) web interface as standard API e
 
 ## Key Features
 
-- **Multi-protocol** -- OpenAI Chat Completions / Responses API / Anthropic Messages / Gemini generateContent
+- **Multi-protocol** -- OpenAI Chat Completions / Responses API / Anthropic Messages
 - **Account pool** -- Min-Heap priority scheduling, 6-state lifecycle, circuit breaker auto-fuse
 - **Auto registration** -- MoeMail / TempMail / GuerrillaMail / GPTMail / YYDS (5 channels)
 - **Tool calling** -- Native FC first + XML Fallback, streaming leak-prevention, loop detection
 - **Thinking mode** -- Model suffix (-thinking / -nothinking) or reasoning_effort parameter
 - **Image generation** -- OpenAI DALL-E compatible, auto intent detection routes to T2I
+- **Multimodal input** -- Supports image, document, audio, and video files; videos are passed through Qwen Web's temporary OSS file flow
 - **Accurate token stats** -- Extracts real usage from upstream SSE, not local estimation
 - **Admin panel** -- Pure HTML admin UI, accounts/keys/settings/cache/register management
 - **WebUI** -- Built-in web chat with multi-session and thinking display
@@ -43,14 +44,13 @@ Qwen2api exposes Alibaba's Qwen (Tongyi Qianwen) web interface as standard API e
 
 | Protocol | Endpoint | Function |
 |----------|----------|----------|
-| OpenAI | `POST /v1/chat/completions` | Chat completion (stream/non-stream/tools/thinking) |
-| OpenAI | `POST /v1/responses` | Responses API (Codex / Agents) |
+| OpenAI | `POST /v1/chat/completions` | Chat completion (stream/non-stream/tools/thinking/file input) |
+| OpenAI | `POST /v1/responses` | Responses API (Codex / Agents / file input) |
 | OpenAI | `POST /v1/images/generations` | Image generation |
-| OpenAI | `POST /v1/embeddings` | Text embeddings |
+| OpenAI | `POST /v1/images/edits` | Image editing |
+| OpenAI | `POST /v1/embeddings` | Not implemented; currently returns 501 |
 | OpenAI | `GET /v1/models` | Model list |
-| Anthropic | `POST /v1/messages` | Claude compatible (tool_use / thinking) |
-| Gemini | `POST /v1beta/models/{m}:generateContent` | Gemini compatible |
-| Gemini | `POST /v1beta/models/{m}:streamGenerateContent` | Gemini streaming |
+| Anthropic | `POST /v1/messages` | Claude compatible (tool_use / thinking / file input) |
 
 ## Available Models
 
@@ -78,7 +78,7 @@ docker run -d \
   -p 7860:7860 \
   -e ADMIN_KEY=your-admin-key \
   -v ./data:/workspace/data \
-  ghcr.io/jiujiu532/qwen2api:latest
+  ghcr.io/highkay/qwen2api:latest
 ```
 
 docker-compose:
@@ -139,6 +139,34 @@ curl http://localhost:7860/v1/chat/completions \
     "messages": [{"role": "user", "content": "Hello"}],
     "stream": true
   }'
+```
+
+### Video / File Input
+
+Chat Completions, Responses, and Anthropic Messages extract files from message content, upload them through Qwen Web's STS flow to temporary OSS, then pass the resulting `files` payload to Qwen. Supported video MIME types are `video/mp4`, `video/webm`, `video/quicktime`, and `video/x-matroska`.
+
+Example OpenAI Chat Completions video input:
+
+```json
+{
+  "model": "qwen3.6-plus",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Describe this video in detail."},
+        {
+          "type": "file",
+          "file": {
+            "name": "1704784424892.mp4",
+            "mime_type": "video/mp4",
+            "data": "<base64 or data:video/mp4;base64,...>"
+          }
+        }
+      ]
+    }
+  ]
+}
 ```
 
 ### Tool Calling

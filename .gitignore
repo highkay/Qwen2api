@@ -51,6 +51,7 @@ qwen2api总json.json
 
 # Tests and scripts
 test_*.py
+!tests/test_*.py
 add_account.py
 fix_*.py
 
